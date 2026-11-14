@@ -22,6 +22,7 @@ const position = [0, 1, 2];
 const frame = makeFrame(.45, [1 / Math.sqrt(1 - .45*.45), null]);
 const outcome = interiorStudy(THREE, mesh, profile, frame, [position, [5,1,2]]);
 assert.ok(outcome.triangles.length > 0);
+assert.ok(outcome.floorTriangles.length > 0);
 assert.deepEqual(outcome.exposure, [{lit:true, conditional:true}, {lit:false, conditional:false}]);
 const steeper = interiorStudy(THREE, mesh, profile, makeFrame(.7, []), []);
 assert.notDeepEqual(steeper.triangles, outcome.triangles);

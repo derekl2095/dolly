@@ -1,4 +1,4 @@
-import {mountDaylight} from "./daylight.js";
+import {mountDaylight} from "./daylight.js?v=sun-preview";
 import {alignMesh, sightlineCheck} from "./sightlines.js";
 import {actorMarks, checkCameraHeight, loadShot, roomKey, shotSettings} from "./room-state.js";
 import {cameraMoveAxis, checkFraming, checkRigClearance, easedPathFraction, editorShotState, findSlide, interpretDirection, pathFromEndpoints, timeFractionAtPath} from "./path.js";
@@ -402,7 +402,8 @@ function mount(THREE, room, mesh, textures, release, captured = false) {
   }
 
   const refreshDaylight = captured ? mountDaylight({THREE, room, mesh, scene, renderer, isAligned: () => aligned, canvas: renderer.domElement,
-    camera: () => reviewing ? overhead : camera, signal: controls.signal, actors: () => actors, render}) : null;
+    camera: () => reviewing ? overhead : camera, signal: controls.signal, actors: () => actors, render,
+    showFloorPatch: triangles => plan.dispatchEvent(new CustomEvent("sunpatch", {detail: triangles}))}) : null;
   const options = {signal: controls.signal};
   alignmentView.addEventListener("click", () => {
     stop();

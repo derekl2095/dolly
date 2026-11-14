@@ -3,7 +3,7 @@ import {parseProjectArchive, projectArchiveMaxBytes, readProjects, writeProject}
 import {loadObstacles, outlineMeasurements, roomKey} from "./room-state.js";
 import {briefSuggestions, runAgent} from "./agent.js?v=agent-capture";
 import {compareCapturedRooms} from "./compare.js";
-import {openMesh, closeMesh, currentShot, planCurrentShot, applyCurrentShot} from "./mesh.js";
+import {openMesh, closeMesh, currentShot, planCurrentShot, applyCurrentShot} from "./mesh.js?v=sun-preview";
 
 const form = document.querySelector("#scout-search");
 const results = document.querySelector("#results");
@@ -80,6 +80,11 @@ meshFile.addEventListener("change", async () => {
   }
 });
 let drawPlan;
+let sunPatch = [];
+canvas.addEventListener("sunpatch", event => {
+  sunPatch = event.detail;
+  drawPlan?.(pose);
+});
 let toWorld;
 let pose;
 let draft;
@@ -442,6 +447,16 @@ function renderRoom(room) {
     context.strokeStyle = "#83b3a4";
     context.lineWidth = 3;
     context.stroke();
+    context.save();
+    context.clip();
+    context.beginPath();
+    for (const triangle of sunPatch) {
+      triangle.forEach((point, index) => context[index ? "lineTo" : "moveTo"](...coords(point)));
+      context.closePath();
+    }
+    context.fillStyle = "#ffcf6b";
+    context.fill();
+    context.restore();
     for (const [a, b] of [...obstacles.map(obstacle => [obstacle.min, obstacle.max]), ...(draft ? [draft] : [])]) {
       const [x, z] = coords(a), [endX, endZ] = coords(b);
       context.fillStyle = "#a35449a8";

@@ -148,17 +148,18 @@ select {max-width:100%} canvas {width:100%;display:block;margin-top:12px;backgro
 <button id="retry-mesh" type="button" hidden>Retry captured mesh</button>
 <details id="daylight" hidden>
 <summary>Direct sunlight</summary>
+<p id="daylight-help"></p>
 <form>
 <label>Latitude <input name="latitude" type="number" min="-90" max="90" step="any" required></label>
 <label>Longitude <input name="longitude" type="number" min="-180" max="180" step="any" required></label>
 <label>Time zone <input name="timeZone" placeholder="America/Chicago" required></label>
 <p id="daylight-location-source"></p>
-<label>True bearing of plan +z <input name="heading" type="number" min="0" max="360" step="any" required></label>
+<label>Compass bearing of the plan’s +Z axis (degrees clockwise from true north) <input name="heading" type="number" min="0" max="360" step="any" required></label>
 <label><input type="checkbox" name="pick"> Pick four window corners in perimeter order on the scan</label>
-<button type="button" id="detect-windows">Detect windows</button>
+<button type="button" id="detect-windows">Suggest windows</button>
 <ul id="window-candidates"></ul>
 <label>Window measurements <textarea name="windows" rows="6" required></textarea></label>
-<button>Save daylight calibration</button>
+<button type="submit">Save daylight calibration</button>
 <label>Study date <input name="date" type="date" required></label>
 <label><input name="show" type="checkbox"> Show simulated sunlight</label>
 <label>Time <input type="range" min="0" max="96" step="1" value="48"></label>
@@ -201,5 +202,5 @@ select {max-width:100%} canvas {width:100%;display:block;margin-top:12px;backgro
 </details></aside>
 </div>
 </main>
-<script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"}}</script>
-<script type="module" src="scout.js?v=shortlist-preview"></script></body></html>
+<script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js","three-mesh-bvh":"https://cdn.jsdelivr.net/npm/three-mesh-bvh@0.8.3/build/index.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"}}</script>
+<script type="module" src="scout.js?v=sun-preview"></script></body></html>

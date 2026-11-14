@@ -12,6 +12,7 @@ export function interiorStudy(THREE, mesh, profile, frame, actors) {
   const towardSun = new THREE.Vector3(...frame.sun.direction);
   const inward = towardSun.clone().negate();
   const ray = new THREE.Raycaster();
+  ray.firstHitOnly = true;
   const cast = (origin, direction, near, far) => {
     ray.set(origin, direction);
     ray.near = near;
@@ -19,6 +20,7 @@ export function interiorStudy(THREE, mesh, profile, frame, actors) {
     return ray.intersectObject(mesh, true)[0];
   };
   const triangles = [];
+  const floorTriangles = [];
   const exposure = actors.map(() => ({lit: false, conditional: false}));
   for (const verdict of frame.windows.filter(viable)) {
     const {corners} = profile.windows.find(window => window.id === verdict.id);
@@ -46,18 +48,25 @@ export function interiorStudy(THREE, mesh, profile, frame, actors) {
         const r = lattice[row+1][col+1], s = lattice[row+1][col];
         for (const points of [[p, q, r], [p, r, s]]) {
           if (points.every(Boolean) && points[0].distanceTo(points[1]) < .7 &&
-              points[1].distanceTo(points[2]) < .7 && points[2].distanceTo(points[0]) < .7)
+              points[1].distanceTo(points[2]) < .7 && points[2].distanceTo(points[0]) < .7) {
             triangles.push(...points.flatMap(point => point.toArray()));
+            if (points.every(point => Math.abs(point.y) < .12))
+              floorTriangles.push(points.map(point => [point.x, point.z]));
+          }
         }
       }
     }
   }
-  return {triangles, exposure};
+  return {triangles, floorTriangles, exposure};
 }
 
-export function mountDaylight({THREE, room, mesh, scene, renderer, isAligned, canvas, camera, signal, actors, render}) {
+export function mountDaylight({THREE, room, mesh, scene, renderer, isAligned, canvas, camera, signal, actors, render, showFloorPatch}) {
   const panel = document.querySelector("#daylight");
+  const frames = new Map();
+  let acceleration;
+  let scheduled = 0;
   const form = panel.querySelector("form");
+  const help = panel.querySelector("#daylight-help");
   const status = panel.querySelector('[role="status"]');
   const clock = panel.querySelector('input[type="range"]');
   const show = panel.querySelector('[name="show"]');
@@ -66,9 +75,10 @@ export function mountDaylight({THREE, room, mesh, scene, renderer, isAligned, ca
   const params = new URLSearchParams({model: session.model});
   if (session.room !== null) params.set("room", session.room);
   const patch = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshBasicMaterial({
-    color: 0xffca70, transparent: true, opacity: .43, side: THREE.DoubleSide,
-    depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2,
+    color: 0xffca70, transparent: true, opacity: .68, side: THREE.DoubleSide,
+    depthWrite: false, polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4,
   }));
+  patch.renderOrder = 2;
   scene.add(patch);
   patch.visible = false;
   let saved;
@@ -78,13 +88,12 @@ export function mountDaylight({THREE, room, mesh, scene, renderer, isAligned, ca
   let ready = false;
   const listen = {signal};
   panel.hidden = false;
-  show.checked = false;
-  pick.checked = false;
   status.textContent = "";
   panel.querySelector("#daylight-location-source").textContent = "";
   form.reset();
-  form.querySelector("button").disabled = false;
-  form.elements.date.value = new Date().toISOString().slice(0, 10);
+  const save = form.querySelector('button[type="submit"]');
+  save.disabled = show.disabled = clock.disabled = true;
+
   form.elements.windows.value = "[]";
   clock.value = "48";
 
@@ -93,7 +102,7 @@ export function mountDaylight({THREE, room, mesh, scene, renderer, isAligned, ca
   const previews = new THREE.Group();
   scene.add(previews);
   suggestions.replaceChildren();
-  detect.disabled = false;
+  detect.disabled = pick.disabled = true;
   let generation = 0;
 
   function clearSuggestions() {
@@ -169,13 +178,16 @@ export function mountDaylight({THREE, room, mesh, scene, renderer, isAligned, ca
   function update() {
     if (!show.checked || !study?.frames?.length) {
       patch.visible = false;
+      showFloorPatch([]);
       render();
       return;
     }
     const index = Number(clock.value);
     const frame = study.frames[index];
     if (!frame) return;
-    const {triangles, exposure} = interiorStudy(THREE, mesh, saved.profile, frame, study.actors);
+    if (!frames.has(index)) frames.set(index, interiorStudy(THREE, mesh, saved.profile, frame, study.actors));
+    const {triangles, floorTriangles, exposure} = frames.get(index);
+    showFloorPatch(floorTriangles);
     patch.geometry.dispose();
     patch.geometry = new THREE.BufferGeometry();
     patch.geometry.setAttribute("position", new THREE.Float32BufferAttribute(triangles, 3));
@@ -183,6 +195,7 @@ export function mountDaylight({THREE, room, mesh, scene, renderer, isAligned, ca
     const assumed = frame.windows.some(w => w.status === "exterior-unknown");
     status.textContent = frame.localTime + " · " + frame.windows.map(w => w.id + " " + w.reason).join(" · ") +
       (assumed ? " · assuming unobstructed sun" : "") +
+      (!triangles.length ? " · No interior surface patch found at this time." : "") +
       exposure.map(({lit, conditional}, i) => " · Actor " + study.indices[i] + " " +
         (lit ? (conditional ? "potential direct sun" : "direct sun") : "outside the evaluated beams")).join("");
     render();
@@ -207,7 +220,26 @@ export function mountDaylight({THREE, room, mesh, scene, renderer, isAligned, ca
     panel.querySelector("#daylight-location-source").textContent = defaults.length
       ? "Filled " + defaults.join(", ") + " from CoStar property " + site.propertyId + "."
       : "";
+    if (!form.elements.date.value) {
+      const zone = form.elements.timeZone.value || undefined;
+      const parts = new Intl.DateTimeFormat("en", {
+        timeZone: zone, year: "numeric", month: "2-digit", day: "2-digit",
+      }).formatToParts();
+      const part = type => parts.find(item => item.type === type).value;
+      form.elements.date.value = [part("year"), part("month"), part("day")].join("-");
+    }
     ready = saved.status === "ready";
+    save.disabled = detect.disabled = pick.disabled = !saved.revision;
+    show.disabled = clock.disabled = !ready;
+    const missing = [
+      ...(["latitude", "longitude", "timeZone"].some(key => !form.elements[key].value) ? ["site coordinates and time zone"] : []),
+      ...(!form.elements.heading.value ? ["true-north bearing"] : []),
+      ...(!saved.profile?.windows?.length ? ["a confirmed exterior window"] : []),
+    ];
+    help.textContent = !saved.revision ? "First use Inspect mesh alignment and save the review." :
+      missing.length ? "To start, add " + missing.join(", ") + ". Then save to show direct sunlight." :
+      "The overlay estimates direct sun over the photographed scan.";
+    if (ready) show.checked = true;
     status.textContent = saved.status === "ready" ? "Daylight calibration ready."
       : saved.status === "stale" ? "Review and resave the daylight calibration for this mesh."
       : "Add a measured window and confirm true north.";
@@ -217,7 +249,7 @@ export function mountDaylight({THREE, room, mesh, scene, renderer, isAligned, ca
     pending?.abort();
     const controller = new AbortController();
     pending = controller;
-    if (!show.checked || !ready) {
+    if (!panel.open || !show.checked || !ready) {
       study = null;
       update();
       return;
@@ -230,6 +262,20 @@ export function mountDaylight({THREE, room, mesh, scene, renderer, isAligned, ca
         body: JSON.stringify({...session, localDate: form.elements.date.value, actors: values}),
       });
       if (signal.aborted || controller.signal.aborted) return;
+      if (result.frames.some(frame => frame.windows.some(viable))) {
+        status.textContent = "Preparing the sunlight preview…";
+        acceleration ??= import("three-mesh-bvh").then(({MeshBVH, acceleratedRaycast}) => {
+          if (signal.aborted) return;
+          mesh.traverse(object => {
+            if (!object.isMesh) return;
+            object.geometry.boundsTree ??= new MeshBVH(object.geometry, {indirect: true});
+            object.raycast = acceleratedRaycast;
+          });
+        }).catch(() => { /* Keep the standard Three.js raycaster as a fallback. */ });
+        await acceleration;
+        if (signal.aborted || controller.signal.aborted) return;
+      }
+      frames.clear();
       clock.max = Math.max(0, result.frames.length - 1);
       study = {...result, actors: values, indices: positions.map(item => item.index)};
       update();
@@ -245,7 +291,6 @@ export function mountDaylight({THREE, room, mesh, scene, renderer, isAligned, ca
 
   form.addEventListener("submit", async event => {
     event.preventDefault();
-    const save = form.querySelector("button");
     if (save.disabled) return;
     save.disabled = true;
     try {
@@ -256,6 +301,9 @@ export function mountDaylight({THREE, room, mesh, scene, renderer, isAligned, ca
       saved = await request("/api/room-lighting", {method: "PUT", headers: {"Content-Type": "application/json"},
         body: JSON.stringify({...session, revision: saved?.revision, profile}), signal});
       ready = true;
+      show.disabled = clock.disabled = false;
+      show.checked = true;
+      help.textContent = "The overlay estimates direct sun over the photographed scan.";
       status.textContent = "Daylight calibration saved.";
       void evaluate();
     } catch (error) {
@@ -295,21 +343,30 @@ export function mountDaylight({THREE, room, mesh, scene, renderer, isAligned, ca
   pick.addEventListener("change", () => { staged = []; }, listen);
   show.addEventListener("change", evaluate, listen);
   form.elements.date.addEventListener("change", evaluate, listen);
-  clock.addEventListener("input", update, listen);
+  panel.addEventListener("toggle", evaluate, listen);
+  clock.addEventListener("input", () => {
+    if (scheduled) return;
+    scheduled = requestAnimationFrame(() => {
+      scheduled = 0;
+      update();
+    });
+  }, listen);
   signal.addEventListener("abort", () => {
     pending?.abort();
+    cancelAnimationFrame(scheduled);
+    showFloorPatch([]);
     clearSuggestions();
     panel.hidden = true;
     patch.geometry.dispose();
     patch.material.dispose();
   }, {once: true});
-  void load().catch(error => { if (!signal.aborted) status.textContent = error.message; });
+  void load().then(evaluate).catch(error => { if (!signal.aborted) status.textContent = error.message; });
   return {
     evaluate,
     reload() {
       generation++;
       clearSuggestions();
-      detect.disabled = false;
+      save.disabled = detect.disabled = pick.disabled = show.disabled = clock.disabled = true;
       ready = false;
       pending?.abort();
       study = null;
