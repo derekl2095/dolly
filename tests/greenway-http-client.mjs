@@ -2,6 +2,13 @@ import assert from "node:assert/strict";
 import {runAgent} from "../site/agent.js";
 
 const base = process.argv[2];
+async function api(path, options) {
+  const response = await fetch(base + path, options);
+  const data = await response.json();
+  if (!response.ok) throw Error(data.error);
+  return data;
+}
+
 async function scout(minimumTravel, allowApply) {
   let alternatives;
   let evidence;
@@ -14,12 +21,7 @@ async function scout(minimumTravel, allowApply) {
     onEvidence(value) { evidence = value; },
     onAlternatives(value) { alternatives = value; },
     apply() { assert.fail("This run must leave the active shot alone"); },
-    async api(path, options) {
-      const response = await fetch(base + path, options);
-      const data = await response.json();
-      if (!response.ok) throw Error(data.error);
-      return data;
-    },
+    api,
   });
   return {alternatives, evidence};
 }
@@ -52,3 +54,24 @@ const meshBytes = await mesh.arrayBuffer();
 assert.ok(meshBytes.byteLength > 0);
 assert.equal(room.matterpakAlignmentVerified, true);
 console.log("Verified the aligned Greenway OBJ is served from the supplied preview bundle.");
+
+const pages = [];
+let paginatedEvidence;
+await runAgent("Check two catalog pages of Houston office leads.", {
+  catalogFilters: {city: "Houston", category: "office"},
+  activity() {},
+  onEvidence(value) { paginatedEvidence = value; },
+  async api(path, options) {
+    const data = await api(path, options);
+    if (path.startsWith("/api/locations?")) pages.push(data);
+    return data;
+  },
+});
+assert.equal(pages.length, 2);
+assert.equal(pages[0].next_offset, 6);
+const properties = pages.flatMap(page => page.rows);
+assert.equal(properties.length, 12);
+assert.equal(new Set(properties.map(property => property.property_id)).size, 12);
+assert.ok(properties.every(property => property.city.toLowerCase() === "houston" && property.category === "office"));
+assert.equal(paginatedEvidence.coverage.propertiesFound, 12);
+console.log("Verified two disjoint catalog pages with the same Houston office filters.");

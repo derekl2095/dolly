@@ -27,6 +27,12 @@ class ScriptedProvider(BaseHTTPRequestHandler):
                                    "slide": .7, "move": "slide", "requireSightlines": False}),
             ],
         ]
+        if any(message["role"] == "user" and "catalog pages" in message["content"]
+               for message in request["messages"]):
+            rounds = [
+                [("search_locations", {"query": "", "city": "Houston", "category": "office"})],
+                [("continue_location_search", {})],
+            ]
         message = {"content": "Finished the scripted investigation.",
                    "tool_calls": [
                        {"id": f"tool-{round_number}-{index}", "type": "function",
