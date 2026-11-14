@@ -65,6 +65,33 @@ export function slideEndpoints(center, axis, distance) {
     center.map((coordinate, i) => coordinate + offset[i])];
 }
 
+// The editor and the solver both read a setup through this pose, so scrubbing
+// a solved shot reproduces the evaluated endpoints.
+export function editorShotState(setup) {
+  const moveKind = setup.moveKind || "slide";
+  const travel = moveKind === "static" ? 0 : Number(setup.travel) || 0;
+  const mark = setup.mark;
+  const aim = setup.aim;
+  let axis = setup.axis;
+  if (!axis || Math.hypot(...axis) < 1e-8) {
+    axis = cameraMoveAxis(moveKind, mark, aim, setup.slideAxis);
+  }
+  if (!axis || Math.hypot(...axis) < 1e-8) {
+    axis = aim ? [aim[1] - mark[1], mark[0] - aim[0]] : [1, 0];
+  }
+  const [start, end] = slideEndpoints(mark, axis, travel);
+  return {
+    start, end, axis, travel, moveKind,
+    lens: setup.lens,
+    mark: mark.slice(),
+    aim: aim ? aim.slice() : null,
+    actors: Array.isArray(setup.actors) ? setup.actors.map(actor => actor ? actor.slice() : null) : null,
+    sensorWidthMm: setup.sensorWidthMm,
+    cameraHeight: setup.cameraHeight,
+    rigRadius: setup.rigRadius,
+  };
+}
+
 export function pathFromEndpoints(start, end) {
   const axis = end.map((value, index) => value - start[index]);
   return {
@@ -88,7 +115,7 @@ export function findSlide(outline, center, aim, axis, distance, radius, keepMark
     }
   }
   for (let step = steps; step >= 0; step--) {
-    const length = step * .05;
+    const length = step / 20;
     for (const [dx, dz] of offsets) {
       const mark = [center[0] + dx, center[1] + dz];
       const direction = axis || [aim[1] - mark[1], mark[0] - aim[0]];
