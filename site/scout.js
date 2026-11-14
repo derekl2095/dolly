@@ -917,11 +917,13 @@ agentForm.addEventListener("submit", async event => {
           throw Error("The open setup changed during scouting.");
         return planCurrentShot(request);
       },
-      onEvidence: ({candidates, unverifiedLeads, queued}) => {
+      onEvidence: ({candidates, unverifiedLeads, recommended, queued}) => {
         agentEvidence.replaceChildren();
         for (const [heading, entries] of [
           ["Tested setups", candidates.map(candidate =>
             [candidate.id, candidate.model, candidate.status, candidate.outcome,
+              candidate.unmet.join(", "),
+              candidate.id === recommended ? "Top technical match" : "",
               candidate.id === queued ? "Selected proposal" : ""].filter(Boolean).join(" · "))],
           ["Leads needing room evidence", unverifiedLeads.map(lead =>
             [lead.name, lead.city, lead.models.length ? "Room outline needed" : "No linked scan"]

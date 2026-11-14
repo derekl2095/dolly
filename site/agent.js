@@ -39,17 +39,27 @@ export async function runAgent(brief, {activity, apply, lockedLens, allowApply, 
   const leads = new Map();
   const inspected = new Map();
   function candidateReports() {
+    const rank = {qualifies: 0, fallback: 1, failed: 2};
     return [...candidates.values()].map(({room, setup, report}) => {
-      const eligible = Boolean(setup && setup.travel >= minimumTravel &&
-        (!requireSightlines || report.sightlinesSampled) && (!lockedRoom || !room));
-      return {...report, status: eligible ? "qualifies" : setup ? "fallback" : "failed"};
-    }).sort((a, b) => Number(b.status === "qualifies") - Number(a.status === "qualifies") ||
-      (b.travel ?? -1) - (a.travel ?? -1));
+      const unmet = [];
+      if (setup?.travel < minimumTravel) unmet.push("Minimum travel");
+      if (setup && requireSightlines && !report.sightlinesSampled) unmet.push("Captured sightlines");
+      if (setup && lockedRoom && room) unmet.push("Current room lock");
+      const status = !setup ? "failed" : unmet.length ? "fallback" : "qualifies";
+      return {...report, status, unmet,
+        travelShortfall: setup ? Math.max(0, report.requested - setup.travel) : null};
+    }).sort((a, b) => rank[a.status] - rank[b.status] ||
+      (a.travelShortfall ?? Infinity) - (b.travelShortfall ?? Infinity) ||
+      Number(Boolean(b.sightlinesSampled)) - Number(Boolean(a.sightlinesSampled)) ||
+      (b.clearanceMargin ?? -Infinity) - (a.clearanceMargin ?? -Infinity) ||
+      (b.framingMargin ?? -Infinity) - (a.framingMargin ?? -Infinity));
   }
   function publishEvidence() {
     const unverifiedLeads = [...leads.values()].filter(lead => !lead.models.length ||
       lead.models.every(([model, , readiness]) => !(inspected.get(model) ?? readiness?.roomCount)));
-    onEvidence({candidates: candidateReports(), unverifiedLeads, queued: proposal?.report.id});
+    const ranked = candidateReports();
+    onEvidence({candidates: ranked, unverifiedLeads, recommended: ranked.find(item =>
+      item.status === "qualifies")?.id, queued: proposal?.report.id});
   }
   const key = (model, room) => JSON.stringify([model, room]);
   const instructions = [
@@ -67,6 +77,7 @@ export async function runAgent(brief, {activity, apply, lockedLens, allowApply, 
     lockedRoom ? "The current room is locked. Any applied proposal must be an in-place revision." : "",
     current ? `Open editor: ${JSON.stringify(current)}.` : "There is no open shot.",
     "New-room comparisons check walls, marked furniture and sampled framing, with optional sampled sightlines against aligned scans. Current-room revisions also check marked furniture and require sampled mesh sightlines when the editor enables that option.",
+    "compare_setups ranks by constraint compliance, requested travel shortfall, sampled sightlines, rig clearance, and framing margin. Explain any choice that differs from that technical ranking using the crew’s stated preferences.",
     "Use rejection counts to select the next test. For framing failures, try another allowed lens or room. For sightline failures, consider shorter travel or another room. Treat a short or static fallback as a tradeoff and report its actual travel.",
     "Preserve the user's creative intent. apply_shot queues a proposal. The editor opens it after you finish. Describe it as queued.",
     allowApply ? "You may open a checked proposal in the editor." : "Compare only. Applying is disabled.",
@@ -159,7 +170,7 @@ export async function runAgent(brief, {activity, apply, lockedLens, allowApply, 
         if (lockedLens !== null && lens !== lockedLens) throw Error("The lens is locked.");
         const result = revise({distance, focal: lens, cameraHeight, objective: args.objective, requireSightlines});
         const id = "shot-" + (candidates.size + 1);
-        const report = {id, lens, cameraHeight: result.setup?.cameraHeight ?? cameraHeight, travel: result.setup?.travel ?? null, outcome: result.reason,
+        const report = {id, model: currentModel, requested: distance, lens, cameraHeight: result.setup?.cameraHeight ?? cameraHeight, travel: result.setup?.travel ?? null, outcome: result.reason,
           ceiling: result.ceiling, clearanceMargin: result.clearanceMargin, sightlinesSampled: result.sightlinesSampled};
         candidates.set(id, {room: null, setup: result.setup, report});
         activity("Checked the open room: " + result.reason);
