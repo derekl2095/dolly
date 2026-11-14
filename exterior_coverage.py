@@ -5,7 +5,7 @@ import math
 import os
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
-from urllib.request import HTTPRedirectHandler, build_opener
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 
 ROUTES = {"oriented": "oriented/collections", "dsm": "dsm/collections"}
@@ -32,11 +32,11 @@ def coverage_queries(longitude, latitude, block=None):
             for kind, wkt in (("oriented", point), ("dsm", area))}
 
 
-def request_coverage(kind, query, token):
+def request_coverage(kind, query, api_key):
     url = "https://api.vexcelgroup.com/v2/" + ROUTES[kind]
-    query = {**query, **({"token": token} if token else {})}
+    request = Request(f"{url}?{urlencode(query)}", headers={"X-API-KEY": api_key})
     try:
-        with build_opener(NoRedirect()).open(f"{url}?{urlencode(query)}", timeout=20) as response:
+        with build_opener(NoRedirect()).open(request, timeout=20) as response:
             metadata = json.load(response)
             return {"http": response.status, "coverage_metadata": metadata}
     except HTTPError as error:
@@ -61,12 +61,12 @@ def main():
         queries = coverage_queries(args.longitude, args.latitude, args.block)
     except ValueError as error:
         parser.error(str(error))
-    token = os.getenv("VEXCEL_API_TOKEN", "").strip()
-    if not args.plan and not token:
-        parser.error("VEXCEL_API_TOKEN is required for live coverage.")
+    api_key = os.getenv("VEXCEL_API_KEY", "").strip()
+    if not args.plan and not api_key:
+        parser.error("VEXCEL_API_KEY is required for live coverage.")
     results = {
         kind: {"route": route, "query": queries[kind]} if args.plan
-        else request_coverage(kind, queries[kind], token)
+        else request_coverage(kind, queries[kind], api_key)
         for kind, route in ROUTES.items()
     }
     print(json.dumps({"property_id": args.property_id, "results": results}, indent=2))

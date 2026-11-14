@@ -40,15 +40,24 @@ python3 exterior_coverage.py 234298 LONGITUDE LATITUDE --block WEST SOUTH EAST N
 ```
 
 The plan prints the two Vexcel v2 coverage requests without credentials.
-With a token entitled to oriented imagery and DSM, run the same request without
+With a hackathon key in `VEXCEL_API_KEY` entitled to oriented imagery and DSM, run the same request without
 `--plan`. Coverage metadata alone does not establish that any raster was
 retrieved. Record the selected image's capture date and the DSM's vertical units,
 pixel size and raster CRS from the returned asset or its metadata, independently
 of the WGS84 query CRS.
 
-Unauthenticated requests to both collection endpoints returned HTTP 403.
-Property coverage, façade imagery, capture date and DSM remain unverified.
-Shadow obstruction remains unverified.
+Authenticated requests at the public Greenway coordinates returned HTTP 200
+for oriented coverage, image metadata, oblique extraction, and DSM coverage.
+The west-oriented JPEG renders the building and surrounding streets. Its
+embedded Vexcel XMP identifies collection `us-tx-houston-2026`, image
+`2026~us-tx-houston-2026~images~W_20251231_173749_48_2DD2A62C6B47311_rgb`,
+and capture timestamp `2025-12-31 17:37:49.0`. The collection-wide last
+capture date differs from this image's capture date.
+
+The DSM coverage reply includes a Houston 2026 collection but omits its
+layer field. No elevation tiles were downloaded in the first run.
+Exterior visual review is available. DSM units, resolution, CRS, and shadow
+obstruction remain unverified.
 
 [Vexcel v2 documentation](https://api.vexcelgroup.com/v2/)
 
@@ -59,7 +68,7 @@ Canal Street Flats (CoStar `9459693`, model `BZ5AMGkJP7s`) was imported after th
 
 ## Vexcel asset requests after coverage is confirmed
 
-Use the collection’s layer and a verified oblique image name. Keep the token local.
+Use the collection’s layer and a verified oblique image name. Keep the key local. The probe sends it in the `X-API-KEY` header.
 
 | Evidence | Vexcel v2 operation | Parameters |
 | --- | --- | --- |

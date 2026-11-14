@@ -18,9 +18,12 @@ class CoverageTests(unittest.TestCase):
             coverage_queries(-95.4, 29.7, [10, 11, 12, 13])
 
     @patch("exterior_coverage.build_opener")
-    def test_http_error_output_does_not_disclose_token_url(self, opener):
+    def test_api_key_is_sent_in_header_and_omitted_from_error_output(self, opener):
         opener.return_value.open.side_effect = HTTPError(
             "https://api.vexcelgroup.com/?token=fixture", 403, "Forbidden", {}, None)
         result = request_coverage("oriented", {"srid": 4326}, "fixture")
+        request = opener.return_value.open.call_args.args[0]
+        self.assertEqual(request.get_header("X-api-key"), "fixture")
+        self.assertNotIn("fixture", request.full_url)
         self.assertEqual(result["http"], 403)
         self.assertNotIn("fixture", str(result))
