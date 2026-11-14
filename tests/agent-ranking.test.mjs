@@ -61,3 +61,62 @@ test("agent opens a ranked candidate when authorized and the model skips selecti
     assert.equal(evidence.queued, expected === undefined ? undefined : "shot-1");
   }
 });
+
+test("a brief searches the catalog and opens the exact setup checked by the room solver", async () => {
+  const room = {
+    modelId: "Wide", roomId: "showroom", label: "Wide showroom", height: 3,
+    outline: [[-3,-6],[3,-6],[3,6],[-3,6]], camera: [0,4], lookAt: [0,0],
+    actors: [[-.5,0],[.5,0]], slideAxis: [1,0],
+  };
+  const narrow = {...room, modelId: "Narrow", outline: [[-.2,-6],[.2,-6],[.2,6],[-.2,6]]};
+  const call = (name, args, id = name) => ({id, function: {name, arguments: JSON.stringify(args)}});
+  const evaluate = model => call("evaluate_shot", {model, room: "showroom",
+    lens: 35, slide: .7, move: "slide", requireSightlines: false}, "evaluate-" + model);
+  let round = 0;
+  let opened;
+  let evidence;
+  await runAgent("Houston office, 35 mm lateral slide", {
+    lockedLens: 35, allowApply: true, minimumTravel: .7,
+    catalogFilters: {city: "Houston", category: "office"}, activity() {},
+    onEvidence(value) { evidence = value; },
+    apply(openedRoom, setup) { opened = {room: openedRoom, setup}; },
+    async api(path, options) {
+      const url = new URL(path, "http://localhost");
+      if (url.pathname === "/api/locations") {
+        assert.equal(url.searchParams.get("city"), "Houston");
+        assert.equal(url.searchParams.get("category"), "office");
+        return {mode: "full", scanReadiness: {Narrow: {roomCount: 1}, Wide: {roomCount: 1}}, rows: [
+          {property_id: 1, name: "Narrow", models: {Narrow: "Tour"}},
+          {property_id: 2, name: "Wide", models: {Wide: "Tour"}},
+          {property_id: 3, name: "No scan", models: {}},
+        ]};
+      }
+      if (url.pathname === "/api/room")
+        return url.searchParams.get("model") === "Wide" ? room : narrow;
+      assert.equal(url.pathname, "/api/agent-turn");
+      const last = () => JSON.parse(JSON.parse(options.body).messages.at(-1).content);
+      switch (round++) {
+        case 0:
+          return {tool_calls: [call("search_locations", {query: "office", city: "Los Angeles", category: null})]};
+        case 1:
+          return {tool_calls: [call("get_room_evidence", {model: "Narrow", room: "showroom"}), evaluate("Narrow")]};
+        case 2:
+          assert.equal(last().travel, null);
+          assert.ok(last().evaluation.clearanceRejected > 0);
+          return {tool_calls: [call("get_room_evidence", {model: "Wide", room: "showroom"}), evaluate("Wide")]};
+        default:
+          assert.ok(Math.abs(last().travel - .7) < 1e-9);
+          assert.ok(last().framingMargin > 0);
+          return {content: "Wide showroom passed the required checks."};
+      }
+    },
+  });
+  assert.equal(opened.room.modelId, "Wide");
+  assert.ok(Math.abs(opened.setup.travel - .7) < 1e-9);
+  assert.equal(opened.setup.lens, 35);
+  assert.deepEqual(opened.setup.mark, room.camera);
+  assert.deepEqual(opened.setup.axis, room.slideAxis);
+  assert.deepEqual(opened.setup.aim, room.lookAt);
+  assert.deepEqual(opened.setup.actors, room.actors);
+  assert.deepEqual(evidence.unverifiedLeads.map(lead => lead.id), [3]);
+});
