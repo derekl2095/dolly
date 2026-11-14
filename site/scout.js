@@ -630,7 +630,7 @@ async function restoreSelection(selection) {
 
 function agentSettings() {
   const inputs = new FormData(agentForm);
-  return {brief: inputs.get("brief"), lens: inputs.get("lens"), minimumTravel: inputs.get("minimum-travel"),
+  return {brief: inputs.get("brief"), lens: inputs.get("lens"), lockedMove: inputs.get("locked-move"), minimumTravel: inputs.get("minimum-travel"),
     shortlistOnly: inputs.has("shortlist-only"), lockRoom: inputs.has("lock-room"), requireSightlines: inputs.has("require-sightlines"), apply: inputs.has("apply")};
 }
 
@@ -639,6 +639,7 @@ function setAgentSettings(settings = {}) {
   agentForm.elements["import-outlines"].checked = false;
   agentForm.elements.brief.value = settings.brief ?? "";
   agentForm.elements.lens.value = settings.lens ?? "";
+  agentForm.elements["locked-move"].value = settings.lockedMove ?? "";
   agentForm.elements["minimum-travel"].value = settings.minimumTravel ?? "";
   agentForm.elements["shortlist-only"].checked = settings.shortlistOnly === true;
   agentForm.elements["lock-room"].checked = settings.lockRoom === true;
@@ -826,6 +827,7 @@ function scoutingConstraints() {
   const lockRoom = inputs.has("lock-room");
   return {
     brief: inputs.get("brief").trim(),
+    lockedMove: inputs.get("locked-move") || null,
     lockedLens: inputs.get("lens") ? Number(inputs.get("lens")) : null,
     minimumTravel: Number(inputs.get("minimum-travel")),
     allowApply: inputs.has("apply"),
@@ -861,6 +863,10 @@ document.querySelector("#review-brief").addEventListener("click", () => {
       : "Shortlist a scan before using shortlist-only scouting.";
     return;
   }
+  if (constraints.lockedMove === "static" && constraints.minimumTravel > 0) {
+    agentResult.textContent = "Set minimum travel to zero for a static shot.";
+    return;
+  }
   const {city, category} = constraints.catalogFilters;
   const lines = [
     constraints.shortlist ? "Scope: " + constraints.shortlist.length + " shortlisted scans."
@@ -868,6 +874,7 @@ document.querySelector("#review-brief").addEventListener("click", () => {
     constraints.lockedRoom ? "Room locked: " + (selectedRoom.label || constraints.currentModel) : "",
     constraints.lockedLens === null ? "Lens: use brief as guidance or lock a lens above."
       : "Locked lens: " + constraints.lockedLens + " mm.",
+    constraints.lockedMove ? "Locked camera move: " + agentForm.elements["locked-move"].selectedOptions[0].textContent : "",
     "Minimum travel: " + constraints.minimumTravel + " m.",
     constraints.requireSightlines ? "Captured sightlines required." : "Captured sightlines optional.",
     constraints.allowImport ? "Matterport outline imports allowed for this run." : "",

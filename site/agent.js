@@ -31,7 +31,11 @@ async function request(path, options) {
   return data;
 }
 
-export async function runAgent(brief, {activity, apply, lockedLens, allowApply, current, revise, lockedRoom, requireSightlines = false, minimumTravel = 0, shortlist = null, currentModel, catalogFilters = {}, onEvidence = () => {}, allowImport = false, api = request}) {
+export async function runAgent(brief, {activity, apply, lockedLens = null, lockedMove = null, allowApply, current, revise, lockedRoom, requireSightlines = false, minimumTravel = 0, shortlist = null, currentModel, catalogFilters = {}, onEvidence = () => {}, allowImport = false, api = request}) {
+  if (lockedMove !== null && !["slide", "push", "pull", "static"].includes(lockedMove))
+    throw Error("Unsupported camera move lock.");
+  if (lockedMove === "static" && minimumTravel > 0)
+    throw Error("Static shots require a zero minimum travel.");
   if (!Number.isFinite(minimumTravel) || minimumTravel < 0 || minimumTravel > 4)
     throw Error("Minimum travel must be between 0 and 4 m.");
   if (shortlist && !shortlist.length) throw Error("Shortlist a scan before limiting the agent to the shortlist.");
@@ -45,6 +49,8 @@ export async function runAgent(brief, {activity, apply, lockedLens, allowApply, 
     const rank = {qualifies: 0, fallback: 1, failed: 2};
     return [...candidates.values()].map(({room, setup, report}) => {
       const unmet = [];
+      if (setup && lockedMove && (setup.travel === 0 ? "static" : report.move) !== lockedMove)
+        unmet.push("Camera move lock");
       if (setup?.travel < minimumTravel) unmet.push("Minimum travel");
       if (setup && requireSightlines && !report.sightlinesSampled) unmet.push("Captured sightlines");
       if (setup && lockedRoom && room) unmet.push("Current room lock");
@@ -85,6 +91,7 @@ export async function runAgent(brief, {activity, apply, lockedLens, allowApply, 
     "Use rejection counts to select the next test. For framing failures, try another allowed lens or room. For sightline failures, consider shorter travel or another room. Treat a short or static fallback as a tradeoff and report its actual travel.",
     "Preserve the user's creative intent. apply_shot queues a proposal. The editor opens it after you finish. Describe it as queued.",
     allowApply ? "Queue a qualifying proposal to honor the crew’s preferences. If you finish without queuing one, the top qualifying technical match opens automatically." : "Compare only. Applying is disabled.",
+    lockedMove ? `Camera move is locked to ${lockedMove}.` : "",
     lockedLens === null ? "The lens is adjustable." : `The lens is locked at ${lockedLens} mm.`,
   ].join(" ");
   const messages = [{role: "system", content: instructions}, {role: "user", content: brief}];
@@ -160,7 +167,8 @@ export async function runAgent(brief, {activity, apply, lockedLens, allowApply, 
             !Number.isFinite(args.slide) || args.slide < 0 || args.slide > 4)
           throw Error("Use a lens of 15–150 mm and a slide of 0–4 m.");
         if (lockedLens !== null && args.lens !== lockedLens) throw Error("The lens is locked.");
-        const move = args.move ?? "slide";
+        const move = args.move ?? lockedMove ?? "slide";
+        if (lockedMove && move !== lockedMove) throw Error("The camera move is locked.");
         if (!["slide", "push", "pull", "static"].includes(move)) throw Error("Unsupported camera move.");
         const [result] = await compareCapturedRooms([room], args.lens, args.slide, move, requireSightlines || args.requireSightlines === true, undefined, current);
         const id = "shot-" + (candidates.size + 1);
@@ -177,6 +185,8 @@ export async function runAgent(brief, {activity, apply, lockedLens, allowApply, 
       case "revise_current_shot": {
         if (scope && !scope.has(currentModel)) throw Error("The open room is outside the shortlist.");
         if (!current || !revise) throw Error("Open a room in the editor first.");
+        if (lockedMove && current.moveKind !== lockedMove)
+          throw Error("The open shot uses a different camera move. Test the locked move as a new setup.");
         const lens = args.lens ?? current.lens;
         const distance = args.slide ?? current.travel;
         const cameraHeight = args.cameraHeight ?? current.cameraHeight;
@@ -188,7 +198,7 @@ export async function runAgent(brief, {activity, apply, lockedLens, allowApply, 
         if (lockedLens !== null && lens !== lockedLens) throw Error("The lens is locked.");
         const result = revise({distance, focal: lens, cameraHeight, objective: args.objective, requireSightlines});
         const id = "shot-" + (candidates.size + 1);
-        const report = {id, model: currentModel, requested: distance, lens, cameraHeight: result.setup?.cameraHeight ?? cameraHeight, travel: result.setup?.travel ?? null, outcome: result.reason,
+        const report = {id, model: currentModel, move: current.moveKind, requested: distance, lens, cameraHeight: result.setup?.cameraHeight ?? cameraHeight, travel: result.setup?.travel ?? null, outcome: result.reason,
           ceiling: result.ceiling, clearanceMargin: result.clearanceMargin, sightlinesSampled: result.sightlinesSampled};
         candidates.set(id, {room: null, setup: result.setup, report});
         activity("Checked the open room: " + result.reason);
@@ -201,6 +211,8 @@ export async function runAgent(brief, {activity, apply, lockedLens, allowApply, 
         if (proposal) throw Error("A candidate is already queued.");
         const item = candidates.get(args.candidate);
         if (!item?.setup) throw Error("Choose a candidate that passed the available checks.");
+        const actualMove = item.setup.travel === 0 ? "static" : item.report.move;
+        if (lockedMove && actualMove !== lockedMove) throw Error("This setup does not match the locked camera move.");
         if (item.setup.travel < minimumTravel)
           throw Error(`This setup is below the ${minimumTravel} m minimum travel.`);
         if (requireSightlines && !item.report.sightlinesSampled) throw Error("Captured sightlines are required.");

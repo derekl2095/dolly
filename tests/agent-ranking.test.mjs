@@ -147,3 +147,25 @@ test("the agent imports only an inspected scan with explicit permission", async 
     assert.equal(imports, Number(allowImport));
   }
 });
+
+test("a locked pull-back cannot be substituted with a static fallback", async () => {
+  let evidence;
+  const turns = [
+    {tool_calls: [{id: "revise", function: {name: "revise_current_shot",
+      arguments: '{"slide":1,"objective":"travel"}'}}]},
+    {tool_calls: [{id: "apply", function: {name: "apply_shot",
+      arguments: '{"candidate":"shot-1"}'}}]},
+    {content: "No qualifying pull-back."},
+  ];
+  await runAgent("Find a pull-back", {
+    lockedMove: "pull", allowApply: true,
+    current: {lens: 35, travel: 1, moveKind: "pull"},
+    activity() {}, onEvidence(value) { evidence = value; },
+    revise() { return {setup: {travel: 0}, reason: "Static fallback"}; },
+    apply() { assert.fail("A static fallback violates the lock"); },
+    async api() { return turns.shift(); },
+  });
+  assert.equal(evidence.recommended, undefined);
+  assert.equal(evidence.queued, undefined);
+  assert.deepEqual(evidence.candidates[0].unmet, ["Camera move lock"]);
+});
