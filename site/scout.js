@@ -628,6 +628,21 @@ async function restoreSelection(selection) {
   return true;
 }
 
+async function openCheckedProposal(room, setup) {
+  const previous = selectionSnapshot();
+  const opening = inspectRoom({name: room.label || room.modelId}, room.modelId, room.roomId, setup);
+  const request = roomRequest;
+  const opened = await opening;
+  if (request !== roomRequest || request.signal.aborted)
+    throw Error("The room changed while the proposal was opening. Your selection was kept.");
+  const missingSightlines = opened && setup.requireSightlines && document.querySelector("#check-scan").disabled;
+  if (!opened || missingSightlines) {
+    await restoreSelection(previous);
+    throw Error(missingSightlines ? "The proposal requires an aligned MatterPak, which the editor could not load."
+      : "Could not open the proposed shot.");
+  }
+}
+
 function agentSettings() {
   const inputs = new FormData(agentForm);
   return {brief: inputs.get("brief"), lens: inputs.get("lens"), lockedMove: inputs.get("locked-move"), targetTravel: inputs.get("target-travel"), minimumTravel: inputs.get("minimum-travel"),
@@ -1006,12 +1021,11 @@ agentForm.addEventListener("submit", async event => {
           open.addEventListener("click", async () => {
             if (projectLocked) return;
             open.disabled = true;
-            const opening = inspectRoom({name: room.label || room.modelId}, room.modelId, room.roomId, setup);
-            const request = roomRequest;
             try {
-              const opened = await opening;
-              if (request === roomRequest && !request.signal.aborted)
-                agentResult.textContent = opened ? "Opened " + id + " for review." : "Could not open " + id + ".";
+              await openCheckedProposal(room, setup);
+              agentResult.textContent = "Opened " + id + " for review.";
+            } catch (error) {
+              agentResult.textContent = error.message;
             } finally {
               open.disabled = false;
             }
@@ -1030,18 +1044,7 @@ agentForm.addEventListener("submit", async event => {
           undoAgent.hidden = false;
           return;
         }
-        const opening = inspectRoom({name: room.label || room.modelId}, room.modelId, room.roomId, setup);
-        const proposalRequest = roomRequest;
-        const opened = await opening;
-        if (proposalRequest !== roomRequest || proposalRequest.signal.aborted)
-          throw Error("The room changed while the proposal was opening. Your selection was kept.");
-        if (!opened) {
-          await restoreSelection(initialRoom ? {
-            label: initialRoom.label, modelId: initialRoom.modelId, roomId: initialRoom.roomId,
-            shot: previousShot || initialRoom.proposedShot,
-          } : null);
-          throw Error("Could not open the proposed shot.");
-        }
+        await openCheckedProposal(room, setup);
         applied = true;
         previousRoom = initialRoom && {...initialRoom, proposedShot: previousShot || initialRoom.proposedShot};
         undoAgent.hidden = !previousRoom;
