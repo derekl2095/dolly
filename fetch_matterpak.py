@@ -37,7 +37,7 @@ def get_download(model, key, token):
     raise ValueError(f"No MatterPak download link. Bundle status: {bundle.get('availability', 'unknown')}.")
 
 
-def mesh_assets(root, manifest):
+def mesh_assets(root, manifest, *, require_textures=False):
     """Resolve and check the files required to render a textured scan."""
     root = root.resolve()
 
@@ -51,6 +51,7 @@ def mesh_assets(root, manifest):
         return path
 
     mesh = require_file(manifest["obj"], root, {".obj"})
+    texture_count = 0
     if manifest.get("mtl"):
         material = require_file(manifest["mtl"], root, {".mtl"})
         with material.open(errors="replace") as source:
@@ -60,6 +61,9 @@ def mesh_assets(root, manifest):
                     if len(fields) != 2:
                         raise ValueError("A MatterPak texture reference is empty.")
                     require_file(fields[1], material.parent, {".jpg", ".jpeg", ".png"})
+                    texture_count += 1
+    if require_textures and not texture_count:
+        raise ValueError("The MatterPak contains no diffuse textures.")
     return mesh
 
 
