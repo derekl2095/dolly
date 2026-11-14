@@ -51,3 +51,22 @@ Property coverage, façade imagery, capture date and DSM remain unverified.
 Shadow obstruction remains unverified.
 
 [Vexcel v2 documentation](https://api.vexcelgroup.com/v2/)
+
+
+## Verified Canal Street capture
+
+Canal Street Flats (CoStar `9459693`, model `BZ5AMGkJP7s`) was imported after the initial inventory check. The living room `613htqkzf66zz7hf7n8kzszed` rendered with textures and passed alignment review at 0 m. With a 24 mm lens and a 1.50 m lateral slide, the solver found roughly 46 cm of additional wall clearance, sampled framing, and clear sightlines at five sampled positions. Furniture clearance was unchecked. Greenway reached the eight-candidate sightline search limit for the same brief. The verified asset archive is available for private team transfer.
+
+## Vexcel asset requests after coverage is confirmed
+
+Use the collection’s layer and a verified oblique image name. Keep the token local.
+
+| Evidence | Vexcel v2 operation | Parameters |
+| --- | --- | --- |
+| Capture date | `oriented/query` | `image-name=IMAGE`, `srid=4326`, `orientation=ALL`, `band=RGB`, `metadata-format=JSON`, `include=image-name,capture-date,collection,geometry,product-type` |
+| Façade image | `oriented/extract` | `layer=LAYER`, `image-name=IMAGE`, `wkt=POINT(LON LAT)`, `srid=4326`, `downsample=2`, `attribution=true`, `image-format=jpeg` |
+| Surface elevation | `dsm/tile` | `layer=LAYER`, `collection=COLLECTION`, `zoom=ZOOM`, `tile-x=X`, `tile-y=Y` for each tile covering the block |
+
+Verify that the image shows the intended façade and retain its capture date. Record the DSM encoding, vertical units and datum, pixel size, and raster CRS from the returned data or provider metadata.
+
+[Vexcel request examples](https://vexcel.atlassian.net/wiki/spaces/APIDOCS/pages/3035136040)
