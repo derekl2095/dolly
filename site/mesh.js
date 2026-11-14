@@ -393,7 +393,9 @@ function mount(THREE, room, mesh, textures, release, captured = false) {
         : "Stand-in bounds clip near " + Math.round(frameCheck.limitingProgress * 100) + "% of the move.";
       document.querySelector("#clearance").dataset.result = margin >= 0 ? "pass" : "fail";
     }
-    viewport.dispatchEvent(new CustomEvent("shotpose", {detail: {from, to, x, z, tx, tz, actors, pathPoints: curve?.points}}));
+    viewport.dispatchEvent(new CustomEvent("shotpose", {
+      detail: {from, to, x, z, tx, tz, actors, rigRadius: settings().rigRadius, pathPoints: curve?.points},
+    }));
     camera.fov = THREE.MathUtils.radToDeg(2 * Math.atan((settings().sensorWidthMm / camera.aspect) / (2 * focal)));
     camera.updateProjectionMatrix();
     camera.position.set(x, settings().cameraHeight, z);

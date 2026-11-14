@@ -454,7 +454,7 @@ main:not(:has(#workspace[data-searched], #workspace > aside:not([hidden]))) {
 
 /* Search results take the full workspace until a room is opened. */
 main:not(:has(#workspace > aside:not([hidden]))) .studio-header a[href="#room-title"] { display: none; }
-#workspace[data-searched]:not(:has(> aside:not([hidden]))) {
+#workspace[data-searched]:is([data-browse], :has(> aside[hidden])) {
   grid-template-columns: minmax(0, 1fr);
   & .scouting { border: 0; }
   & .scouting-hero {
@@ -497,7 +497,7 @@ main:not(:has(#workspace > aside:not([hidden]))) .studio-header a[href="#room-ti
 }
 .location-actions button:first-child:hover { background: var(--accent-hover); }
 @media (min-width: 850px) {
-  #workspace[data-searched]:not(:has(> aside:not([hidden]))) #scout-search {
+  #workspace[data-searched]:is([data-browse], :has(> aside[hidden])) #scout-search {
     grid-template-columns: minmax(220px, 2.2fr) minmax(120px, 1fr) minmax(140px, 1fr) auto;
     & > input { grid-column: 1; }
     & > button { grid-column: 4; grid-row: 1; }
@@ -505,7 +505,53 @@ main:not(:has(#workspace > aside:not([hidden]))) .studio-header a[href="#room-ti
   }
 }
 @media (prefers-reduced-motion: no-preference) {
-  #workspace[data-searched]:not(:has(> aside:not([hidden]))) #results article {
+  #workspace[data-searched]:is([data-browse], :has(> aside[hidden])) #results article {
     animation: reveal-heading .26s ease-out both;
   }
 }
+
+.project-controls { padding: 8px 18px 16px; border-radius: 0 0 10px 10px; }
+.project-controls > section { padding: 14px 0; border-bottom: 1px solid var(--line); }
+.project-controls h2 { font: 400 1.65rem/1 var(--display); }
+#project-form { align-items: end; margin: 0; gap: 8px; }
+#project-form > label { flex: 1 1 165px; }
+#project-list { width: 100%; }
+.project-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
+#projects .project-files summary { padding: 11px 0; }
+.project-files label { display: grid; gap: 4px; margin-bottom: 8px; }
+#project-status:empty { display: none; }
+#project-status:not(:empty) { margin: 8px 0 0; }
+#workspace:not([data-searched]) #back-to-results,
+#workspace[data-browse] > aside,
+#workspace:not([data-browse]):has(> aside:not([hidden])) #location-map-panel { display: none; }
+#location-map-panel { min-width: 0; overflow: hidden; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
+#location-map-panel header { padding: 13px 15px; }
+#location-map-panel h2 { margin: 0; font-size: 1.65rem; }
+#location-map-status { margin: 4px 0 0; color: var(--muted); font-size: .82rem; }
+#location-map { height: clamp(320px, 52vh, 550px); background: #292522; color: var(--ink); }
+#location-map .leaflet-tile-pane { filter: grayscale(.85) invert(.88) sepia(.22) brightness(.82); }
+#location-map .leaflet-control-attribution,
+#location-map .leaflet-bar a,
+#location-map .leaflet-popup-content-wrapper,
+#location-map .leaflet-popup-tip { background: var(--panel); color: var(--ink); }
+#location-map .leaflet-control-attribution a { color: var(--accent); }
+#location-map .leaflet-popup-content { display: grid; gap: 8px; }
+#location-map .leaflet-popup-content button { min-height: 34px; }
+.scout-map-pin { box-sizing: border-box; background: var(--accent); border: 2px solid #472c21; border-radius: 50%; box-shadow: 0 0 0 3px #f3b99042; }
+.result-list { min-width: 0; }
+.result-list > :is(#results, #more-locations) { margin-inline: 16px; }
+#workspace[data-searched]:is([data-browse], :has(> aside[hidden])) {
+  & .discovery { margin-block: 16px; }
+  & .result-list > :is(#results, #more-locations) { margin-inline: 0; }
+  & #results:not(:empty) { margin-top: 0; }
+}
+#location-map-panel { margin-bottom: 16px; }
+#location-map-panel header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+#location-map-panel header label { display: flex; align-items: center; gap: 10px; }
+#rig-width { margin: 0; padding: 8px 10px 0; color: var(--muted); font-size: .8rem; }

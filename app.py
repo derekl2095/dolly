@@ -18,6 +18,7 @@ from urllib.parse import parse_qs, unquote, urlsplit
 from catalog import build, search_page, source_mode
 from fetch_matterpak import download_mesh, mesh_assets, unpack
 from import_room import DEFAULT_ASSETS, import_measured_room, import_rooms, read_model, valid_id
+from location_map import locate_address, property_address
 from model_provider import configured, next_turn
 
 ROOT = Path(__file__).resolve().parent
@@ -307,6 +308,16 @@ class Handler(SimpleHTTPRequestHandler):
             return self.respond(200, {"configured": matterport_configured()})
         if url.path == "/api/agent-status":
             return self.respond(200, {"configured": configured()})
+        if url.path == "/api/location-map":
+            value = params.get("property", [""])[0]
+            if not re.fullmatch(r"[0-9]{1,15}", value):
+                return self.respond(400, {"error": "Invalid property ID."})
+            try:
+                address = property_address(self.server.database, int(value))
+                position = locate_address(*address) if address else None
+            except (OSError, sqlite3.Error, ValueError, KeyError, TypeError):
+                return self.respond(503, {"error": "Address lookup is temporarily unavailable."})
+            return self.respond(200, {"position": position})
         if url.path == "/api/locations":
             try:
                 imported_models = None

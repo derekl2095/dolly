@@ -3,16 +3,26 @@ import {parseProjectArchive, projectArchiveMaxBytes, readProjects, writeProject}
 import {loadObstacles, outlineMeasurements, roomKey} from "./room-state.js";
 import {briefSuggestions, runAgent} from "./agent.js";
 import {compareCapturedRooms} from "./compare.js";
-import {openMesh, closeMesh, currentShot, planCurrentShot, applyCurrentShot} from "./mesh.js?v=5";
+import {openMesh, closeMesh, currentShot, planCurrentShot, applyCurrentShot} from "./mesh.js?v=8";
+import {addMapLocations, resetLocationMap} from "./location-map.js?v=8";
 
 const form = document.querySelector("#scout-search");
 const results = document.querySelector("#results");
 const workspace = document.querySelector("#workspace");
 const roomTitle = document.querySelector("#room-title");
 const roomPanel = roomTitle.closest("aside");
+const backToResults = document.querySelector("#back-to-results");
+backToResults.addEventListener("click", () => {
+  workspace.dataset.browse = "";
+  form.querySelector("input[name=q]").focus();
+});
+document.querySelector('a[href="#room-title"]').addEventListener("click", () => {
+  delete workspace.dataset.browse;
+});
 const status = document.querySelector("#status");
 const roomStatus = document.querySelector("#room-status");
 const canvas = document.querySelector("#plan");
+const rigWidth = document.querySelector("#rig-width");
 let roomRequest;
 let selectedRoom;
 const roomPicker = document.querySelector("#room-picker");
@@ -214,6 +224,9 @@ canvas.addEventListener("pointerup", event => {
 canvas.addEventListener("pointercancel", () => setDrawing(false));
 document.querySelector("#viewport").addEventListener("shotpose", event => {
   pose = event.detail;
+  const width = `${(2 * pose.rigRadius).toFixed(2)} m rig width · drawn to scale`;
+  if (rigWidth.textContent !== width) rigWidth.textContent = width;
+  rigWidth.hidden = false;
   drawPlan?.(pose);
 });
 const capture = document.querySelector("#capture");
@@ -246,6 +259,7 @@ function renderShortlist() {
 
 function card(row, readiness = {}) {
   const article = element("article", "");
+  article.tabIndex = -1;
   article.append(element("h3", row.name || row.street),
     element("p", [row.street, row.city, row.state].filter(Boolean).join(", ")));
   if (row.evidence) article.append(element("p", row.evidence));
@@ -330,6 +344,7 @@ function enableMeasuredImport(row, model, signal) {
 }
 
 async function inspectRoom(row, model, roomId, proposedShot) {
+  delete workspace.dataset.browse;
   roomPanel.hidden = false;
   roomRequest?.abort();
   measuredRoom.hidden = true;
@@ -342,7 +357,7 @@ async function inspectRoom(row, model, roomId, proposedShot) {
   const request = new AbortController();
   roomRequest = request;
   document.querySelector("#room-title").textContent = row.name || row.street;
-  canvas.hidden = capture.hidden = true;
+  canvas.hidden = capture.hidden = rigWidth.hidden = true;
   drawPlan = toWorld = pose = undefined;
   tools.hidden = true;
   placeMark.value = "camera";
@@ -479,13 +494,33 @@ function renderRoom(room) {
       context.fillRect(x, z, endX - x, endZ - z);
       context.strokeRect(x, z, endX - x, endZ - z);
     }
+    if (pose) {
+      const footprint = pose.pathPoints || [pose.from, pose.to];
+      const diameter = 2 * pose.rigRadius * scale;
+      const color = document.querySelector("#clearance").dataset.result === "fail"
+        ? "#ff8b8266" : "#f1b87b66";
+      context.save();
+      context.beginPath();
+      if (footprint.every(point => point[0] === footprint[0][0] && point[1] === footprint[0][1])) {
+        context.arc(...coords(footprint[0]), diameter / 2, 0, 2 * Math.PI);
+        context.fillStyle = color;
+        context.fill();
+      } else {
+        footprint.forEach((point, index) => context[index ? "lineTo" : "moveTo"](...coords(point)));
+        context.strokeStyle = color;
+        context.lineWidth = diameter;
+        context.lineJoin = context.lineCap = "round";
+        context.stroke();
+      }
+      context.restore();
+    }
     if (stroke || pose) {
       const path = stroke || pose.pathPoints || [pose.from, pose.to];
       context.beginPath();
       path.forEach((point, index) => context[index ? "lineTo" : "moveTo"](...coords(point)));
       context.strokeStyle = !stroke && document.querySelector("#clearance").dataset.result === "fail"
         ? "#ff8b82" : "#f1b87b";
-      context.lineWidth = 5;
+      context.lineWidth = stroke ? 4 : Math.min(3, pose.rigRadius * scale);
       context.lineJoin = context.lineCap = "round";
       context.stroke();
     }
@@ -538,11 +573,14 @@ const moreLocations = document.querySelector("#more-locations");
 let nextLocationPage;
 let searchRequest;
 
-function resetLocationSearch() {
+function resetLocationSearch(city) {
   searchRequest?.abort();
+  delete workspace.dataset.searched;
+  delete workspace.dataset.browse;
   nextLocationPage = undefined;
   moreLocations.hidden = true;
   results.replaceChildren();
+  resetLocationMap(city);
 }
 
 async function loadLocationPage(filters) {
@@ -559,7 +597,9 @@ async function loadLocationPage(filters) {
     if (request.signal.aborted) return;
     if (!response.ok) throw new Error(data.error || "Search API failed");
     const {rows, mode, scanReadiness, next_offset: offset} = data;
-    results.append(...rows.map(row => card(row, scanReadiness)));
+    const cards = rows.map(row => card(row, scanReadiness));
+    results.append(...cards);
+    void addMapLocations(rows, cards);
     nextLocationPage = undefined;
     if (Number.isSafeInteger(offset) && offset > Number(filters.get("offset") ?? 0)) {
       nextLocationPage = new URLSearchParams(filters);
@@ -578,8 +618,15 @@ async function loadLocationPage(filters) {
 
 form.addEventListener("submit", event => {
   event.preventDefault();
-  resetLocationSearch();
-  void loadLocationPage(new URLSearchParams(new FormData(form)));
+  const filters = new URLSearchParams(new FormData(form));
+  const browsing = Object.hasOwn(workspace.dataset, "browse");
+  resetLocationSearch(filters.get("city"));
+  if (browsing) workspace.dataset.browse = "";
+  void loadLocationPage(filters);
+});
+document.querySelector("#location-map-city").addEventListener("change", event => {
+  form.elements.city.value = event.target.value;
+  form.requestSubmit();
 });
 moreLocations.addEventListener("click", () => {
   if (nextLocationPage) void loadLocationPage(nextLocationPage);
@@ -722,7 +769,7 @@ async function restoreSelection(selection) {
   importMesh.disabled = retryMesh.disabled = false;
   selectedRoom = undefined;
   closeMesh();
-  roomPicker.hidden = canvas.hidden = capture.hidden = tools.hidden = true;
+  roomPicker.hidden = canvas.hidden = capture.hidden = tools.hidden = rigWidth.hidden = true;
   drawPlan = toWorld = pose = undefined;
   setDrawing(false);
   document.querySelector("#room-title").textContent = "Room plan";
