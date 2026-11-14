@@ -19,7 +19,7 @@ import daylight
 
 from catalog import build, coordinates_indexed, index_property_coordinates, scan_location, search_page, source_mode
 from fetch_matterpak import download_mesh, mesh_assets, stored_locally, unpack
-from import_room import DEFAULT_ASSETS, import_measured_room, import_rooms, read_model, valid_id
+from import_room import DEFAULT_ASSETS, OPENINGS_QUERY, opening_candidates, import_measured_room, import_rooms, read_model, valid_id
 from model_provider import configured, next_turn
 
 ROOT = Path(__file__).resolve().parent
@@ -232,7 +232,7 @@ class Handler(SimpleHTTPRequestHandler):
 
     def do_POST(self):
         path = urlsplit(self.path)
-        if path.path not in {"/api/upload-matterpak", "/api/daylight-study", "/api/agent-turn", "/api/import-room", "/api/import-measured-room", "/api/import-matterpak", "/api/room-alignment"}:
+        if path.path not in {"/api/upload-matterpak", "/api/daylight-study", "/api/window-candidates", "/api/agent-turn", "/api/import-room", "/api/import-measured-room", "/api/import-matterpak", "/api/room-alignment"}:
             return self.respond(404, {"error": "Unknown endpoint."})
         origin = self.headers.get("Origin")
         if origin and origin != f"http://{self.headers.get('Host')}":
@@ -249,6 +249,8 @@ class Handler(SimpleHTTPRequestHandler):
             payload = json.loads(self.rfile.read(size))
             if not isinstance(payload, dict):
                 raise ValueError
+            if path.path == "/api/window-candidates":
+                return self.window_candidates(payload)
             if path.path == "/api/daylight-study":
                 return self.room_lighting(payload, evaluate=True)
             if self.path == "/api/import-room":
@@ -268,6 +270,25 @@ class Handler(SimpleHTTPRequestHandler):
             return self.respond(200, next_turn({"messages": payload["messages"], "tools": payload["tools"]}))
         except RuntimeError as error:
             return self.respond(503, {"error": str(error)})
+
+    def window_candidates(self, data):
+        model, room_id = data.get("model"), data.get("room")
+        if not isinstance(model, str) or not re.fullmatch(r"[A-Za-z0-9]{1,40}", model) or (
+                room_id is not None and not valid_id(room_id)):
+            return self.respond(400, {"error": "Invalid room reference."})
+        room = self.server.room(model, room_id)
+        if not room or room.get("roomId") != room_id:
+            return self.respond(404, {"error": "Room not found."})
+        if not room_id or not matterport_configured() or not room.get("matterpakAlignmentVerified"):
+            return self.respond(200, {"candidates": []})
+        try:
+            result = read_model(model, interactive=False, query=OPENINGS_QUERY)
+            rooms = ((result.get("data") or {}).get("model") or {}).get("rooms") or []
+            vector = next((entry for entry in rooms if entry.get("id") == room_id), {})
+            candidates = opening_candidates(vector, room["outline"], room.get("matterpakFloorHeight", 0))
+        except (OSError, ValueError, TypeError, KeyError):
+            candidates = []
+        return self.respond(200, {"candidates": candidates})
 
     def import_room(self, payload):
         model = payload.get("model")

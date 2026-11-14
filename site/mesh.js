@@ -401,7 +401,7 @@ function mount(THREE, room, mesh, textures, release, captured = false) {
     else stop();
   }
 
-  const refreshDaylight = captured ? mountDaylight({THREE, room, mesh, scene, canvas: renderer.domElement,
+  const refreshDaylight = captured ? mountDaylight({THREE, room, mesh, scene, renderer, isAligned: () => aligned, canvas: renderer.domElement,
     camera: () => reviewing ? overhead : camera, signal: controls.signal, actors: () => actors, render}) : null;
   const options = {signal: controls.signal};
   alignmentView.addEventListener("click", () => {

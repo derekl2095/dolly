@@ -1,3 +1,4 @@
+import {scanWindowCandidates} from "./window-detection.js";
 async function request(path, options) {
   const response = await fetch(path, options);
   const data = await response.json();
@@ -54,7 +55,7 @@ export function interiorStudy(THREE, mesh, profile, frame, actors) {
   return {triangles, exposure};
 }
 
-export function mountDaylight({THREE, room, mesh, scene, canvas, camera, signal, actors, render}) {
+export function mountDaylight({THREE, room, mesh, scene, renderer, isAligned, canvas, camera, signal, actors, render}) {
   const panel = document.querySelector("#daylight");
   const form = panel.querySelector("form");
   const status = panel.querySelector('[role="status"]');
@@ -86,6 +87,84 @@ export function mountDaylight({THREE, room, mesh, scene, canvas, camera, signal,
   form.elements.date.value = new Date().toISOString().slice(0, 10);
   form.elements.windows.value = "[]";
   clock.value = "48";
+
+  const detect = panel.querySelector("#detect-windows");
+  const suggestions = panel.querySelector("#window-candidates");
+  const previews = new THREE.Group();
+  scene.add(previews);
+  suggestions.replaceChildren();
+  detect.disabled = false;
+  let generation = 0;
+
+  function clearSuggestions() {
+    for (const outline of [...previews.children]) {
+      outline.geometry.dispose();
+      outline.material.dispose();
+      previews.remove(outline);
+    }
+    suggestions.replaceChildren();
+  }
+
+  detect.addEventListener("click", async () => {
+    if (!isAligned()) {
+      status.textContent = "Review the MatterPak alignment before detecting windows.";
+      return;
+    }
+    const attempt = ++generation;
+    clearSuggestions();
+    detect.disabled = true;
+    status.textContent = "Looking for window candidates…";
+    try {
+      const data = await request("/api/window-candidates", {method: "POST",
+        headers: {"Content-Type": "application/json"}, body: JSON.stringify(session), signal});
+      if (signal.aborted || attempt !== generation) return;
+      const candidates = data.candidates.length ? data.candidates : scanWindowCandidates(THREE, room, mesh, renderer);
+      candidates.forEach((candidate, index) => {
+        const {corners, outward, source} = candidate;
+        const outline = new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(
+          corners.map(point => new THREE.Vector3(...point))),
+          new THREE.LineBasicMaterial({color: 0x72e2ff, depthTest: false}));
+        outline.renderOrder = 12;
+        previews.add(outline);
+        const row = document.createElement("li");
+        row.append(document.createTextNode("Window candidate " + (index+1) + " · " + source + " "));
+        function remove() {
+          previews.remove(outline);
+          outline.geometry.dispose();
+          outline.material.dispose();
+          row.remove();
+          render();
+        }
+        for (const [label, action] of [["Use candidate", () => {
+          try {
+            const windows = JSON.parse(form.elements.windows.value);
+            let id = 1;
+            while (windows.some(window => window.id === "window-" + id)) id++;
+            windows.push({id: "window-" + id, corners, outward, source});
+            form.elements.windows.value = JSON.stringify(windows, null, 2);
+            status.textContent = "Candidate added. Confirm this is exterior glazing, adjust measurements if needed, then save.";
+            remove();
+          } catch {
+            status.textContent = "Fix the window measurements before adding a candidate.";
+          }
+        }], ["Discard", remove]]) {
+          const button = document.createElement("button");
+          button.type = "button";
+          button.textContent = label;
+          button.addEventListener("click", action, listen);
+          row.append(button);
+        }
+        suggestions.append(row);
+      });
+      status.textContent = candidates.length ? "Review the outlined candidates against the scan."
+        : "No window candidates found. Pick four corners manually.";
+      render();
+    } catch (error) {
+      if (!signal.aborted && attempt === generation) status.textContent = error.message;
+    } finally {
+      if (!signal.aborted && attempt === generation) detect.disabled = false;
+    }
+  }, listen);
 
   function update() {
     if (!show.checked || !study?.frames?.length) {
@@ -219,6 +298,7 @@ export function mountDaylight({THREE, room, mesh, scene, canvas, camera, signal,
   clock.addEventListener("input", update, listen);
   signal.addEventListener("abort", () => {
     pending?.abort();
+    clearSuggestions();
     panel.hidden = true;
     patch.geometry.dispose();
     patch.material.dispose();
@@ -227,6 +307,9 @@ export function mountDaylight({THREE, room, mesh, scene, canvas, camera, signal,
   return {
     evaluate,
     reload() {
+      generation++;
+      clearSuggestions();
+      detect.disabled = false;
       ready = false;
       pending?.abort();
       study = null;

@@ -80,3 +80,17 @@ class DaylightTest(unittest.TestCase):
             self.assertEqual(h.room_lighting(payload, save=True)[0], 409)
             mesh[2] += 1
             self.assertEqual(h.room_lighting(ref, evaluate=True)[1]["status"], "unknown")
+
+    def test_matterport_opening_maps_to_aligned_wall(self):
+        from import_room import opening_candidates
+
+        outline = [[0, 0], [4, 0], [4, 4], [0, 4]]
+        opening = {"id": "test", "type": "opening", "width": 2, "height": 1,
+                   "lowerElevation": 3, "relativeCenter": .5}
+        edge = {"type": "wall", "vertices": [{"position": {"x": 4, "y": 0}},
+                                             {"position": {"x": 0, "y": 0}}],
+                "openings": [opening, {**opening, "type": "doorway"}]}
+        candidates = opening_candidates({"boundary": {"edges": [edge]}}, outline, 2)
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(candidates[0]["outward"], [0, 0, -1])
+        self.assertEqual(candidates[0]["corners"], [[3, 1, 0], [1, 1, 0], [1, 2, 0], [3, 2, 0]])
