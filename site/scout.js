@@ -964,6 +964,13 @@ agentForm.addEventListener("submit", async event => {
             const entry = element("li", [lead.name, lead.city,
               lead.models.length ? "Room outline needed" : "No linked scan"].filter(Boolean).join(" · "));
             if (lead.evidence) entry.append(element("p", lead.evidence));
+            for (const scan of lead.scans) {
+              const open = element("button", "Inspect " + (scan.caption || scan.model));
+              open.type = "button";
+              open.addEventListener("click", () => inspectRoom({name: lead.name || scan.model}, scan.model));
+              entry.append(open);
+              if (scan.importError) entry.append(element("p", scan.importError));
+            }
             list.append(entry);
           }
           agentEvidence.append(element("h3", "Leads needing room evidence"), list);

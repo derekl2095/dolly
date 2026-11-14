@@ -190,3 +190,29 @@ test("shorter retries share the crew's travel target", async () => {
   assert.equal(evidence.recommended, "shot-2");
   assert.equal(evidence.candidates[1].travelDifference, .75);
 });
+
+test("a failed outline import leaves an actionable property lead", async () => {
+  const call = (name, args) => ({id: name, function: {name, arguments: JSON.stringify(args)}});
+  const scan = {model: "Canal"};
+  let evidence;
+  const turns = [
+    {tool_calls: [call("search_locations", {query: "Canal"}), call("inspect_location", scan)]},
+    {tool_calls: [call("import_capture_outline", scan)]},
+    {content: "Room evidence still needed."},
+  ];
+  await runAgent("Scout the Canal showroom", {
+    allowImport: true,
+    activity() {},
+    onEvidence(value) { evidence = value; },
+    async api(path) {
+      if (path.startsWith("/api/locations?"))
+        return {mode: "full", rows: [{property_id: 1, name: "Canal showroom", models: {Canal: "Showroom"}}]};
+      if (path.startsWith("/api/rooms?")) return [];
+      if (path === "/api/import-room") throw Error("No closed room outlines.");
+      assert.equal(path, "/api/agent-turn");
+      return turns.shift();
+    },
+  });
+  assert.deepEqual(evidence.unverifiedLeads[0].scans,
+    [{model: "Canal", caption: "Showroom", importError: "No closed room outlines."}]);
+});

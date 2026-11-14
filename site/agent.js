@@ -46,6 +46,7 @@ export async function runAgent(brief, {activity, apply, lockedLens = null, locke
   const leads = new Map();
   const inspected = new Map();
   const importAttempts = new Set();
+  const importErrors = new Map();
   const availableTools = allowImport ? tools : tools.filter(tool => tool.function.name !== "import_capture_outline");
   function candidateReports() {
     const rank = {qualifies: 0, fallback: 1, failed: 2};
@@ -69,8 +70,14 @@ export async function runAgent(brief, {activity, apply, lockedLens = null, locke
   function publishEvidence() {
     const unverifiedLeads = [...leads.values()].filter(lead => !lead.models.length ||
       lead.models.every(([model, , readiness]) => !(inspected.get(model) ?? readiness?.roomCount)));
+    const actionableLeads = unverifiedLeads.map(lead => ({
+      ...lead,
+      scans: lead.models.map(([model, caption]) => ({
+        model, caption, importError: importErrors.get(model),
+      })),
+    }));
     const ranked = candidateReports();
-    onEvidence({candidates: ranked, unverifiedLeads, recommended: ranked.find(item =>
+    onEvidence({candidates: ranked, unverifiedLeads: actionableLeads, recommended: ranked.find(item =>
       item.status === "qualifies")?.id, queued: proposal?.report.id});
   }
   const key = (model, room) => JSON.stringify([model, room]);
@@ -144,11 +151,17 @@ export async function runAgent(brief, {activity, apply, lockedLens = null, locke
           throw Error("Use at most two distinct scan imports per investigation.");
         importAttempts.add(args.model);
         activity(`Importing room outlines for scan ${args.model}.`);
-        const result = await api("/api/import-room", {
-          method: "POST", headers: {"Content-Type": "application/json"},
-          body: JSON.stringify({model: args.model}),
-        });
-        return result;
+        try {
+          const result = await api("/api/import-room", {
+            method: "POST", headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({model: args.model}),
+          });
+          if (result.imported > 0 || result.alreadyAvailable) inspected.set(args.model, result.imported || 1);
+          return result;
+        } catch (error) {
+          importErrors.set(args.model, error.message);
+          throw error;
+        }
       }
       case "get_room_evidence": {
         if (!seen.has(args.model)) throw Error("Search for this model first.");
