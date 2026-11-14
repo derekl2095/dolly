@@ -80,6 +80,7 @@ export function mountDaylight({THREE, room, mesh, scene, canvas, camera, signal,
   show.checked = false;
   pick.checked = false;
   status.textContent = "";
+  panel.querySelector("#daylight-location-source").textContent = "";
   form.reset();
   form.querySelector("button").disabled = false;
   form.elements.date.value = new Date().toISOString().slice(0, 10);
@@ -116,6 +117,17 @@ export function mountDaylight({THREE, room, mesh, scene, canvas, camera, signal,
       for (const key of ["latitude", "longitude", "heading", "timeZone"]) form.elements[key].value = saved.profile[key];
       form.elements.windows.value = JSON.stringify(saved.profile.windows, null, 2);
     }
+    const site = saved.locationDefaults;
+    const defaults = [];
+    for (const [key, label] of [["latitude", "latitude"], ["longitude", "longitude"], ["timeZone", "market time zone"]]) {
+      if (site?.[key] != null && form.elements[key].value === "") {
+        form.elements[key].value = site[key];
+        defaults.push(label);
+      }
+    }
+    panel.querySelector("#daylight-location-source").textContent = defaults.length
+      ? "Filled " + defaults.join(", ") + " from CoStar property " + site.propertyId + "."
+      : "";
     ready = saved.status === "ready";
     status.textContent = saved.status === "ready" ? "Daylight calibration ready."
       : saved.status === "stale" ? "Review and resave the daylight calibration for this mesh."

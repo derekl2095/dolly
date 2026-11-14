@@ -103,6 +103,52 @@ def build(database, kit, password=None, *, starter_only=False):
         return count
 
 
+
+def index_property_coordinates(database, kit, password=None):
+    """Hydrate coordinates without rebuilding the existing full-text index."""
+    sites = {}
+    with kit_files(kit, password) as (_, properties):
+        for line in properties:
+            record = json.loads(line)
+            address = record.get("primaryAddress") or {}
+            latitude, longitude = address.get("latitude"), address.get("longitude")
+            if (type(latitude) in (int, float) and -90 <= latitude <= 90
+                    and type(longitude) in (int, float) and -180 <= longitude <= 180):
+                sites.setdefault(record["id"], (latitude, longitude))
+    with sqlite3.connect(database) as connection:
+        connection.execute("CREATE TABLE IF NOT EXISTS property_coordinates "
+                           "(property_id INTEGER PRIMARY KEY, latitude REAL, longitude REAL)")
+        connection.execute("DELETE FROM property_coordinates")
+        connection.executemany("INSERT INTO property_coordinates VALUES (?, ?, ?)",
+                               ((key, *values) for key, values in sites.items()))
+
+
+def coordinates_indexed(database):
+    with _connect_readonly(database) as connection:
+        return connection.execute("SELECT 1 FROM sqlite_master WHERE name = 'property_coordinates'").fetchone() is not None
+
+
+def scan_location(database, model):
+    """Return unambiguous site metadata for a catalog-linked Matterport model."""
+    zones = {("houston", "TX"): "America/Chicago", ("los angeles", "CA"): "America/Los_Angeles"}
+    with _connect_readonly(database) as connection:
+        # Older portable catalogs still supply the city and state.
+        indexed = connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE name = 'property_coordinates'").fetchone()
+        coordinates = ("c.latitude, c.longitude FROM locations "
+                       "LEFT JOIN property_coordinates c USING (property_id)" if indexed
+                       else "NULL, NULL FROM locations")
+        rows = connection.execute(
+            "SELECT locations.property_id, city, state, " + coordinates +
+            " WHERE EXISTS (SELECT 1 FROM json_each(locations.models) WHERE key = ?) LIMIT 2",
+            (model,)).fetchall()
+    if len(rows) != 1:
+        return None
+    property_id, city, state, latitude, longitude = rows[0]
+    return {"propertyId": property_id, "latitude": latitude, "longitude": longitude,
+            "timeZone": zones.get(((city or "").strip().casefold(), (state or "").strip().upper())),
+            "source": "CoStar primary address"}
+
 def source_mode(database):
     with sqlite3.connect(database.resolve().as_uri() + "?mode=ro", uri=True) as connection:
         if not connection.execute("SELECT EXISTS(SELECT 1 FROM locations)").fetchone()[0]:
@@ -214,6 +260,11 @@ if __name__ == "__main__":
     search_parser.add_argument("--limit", type=int, default=12)
     search_parser.add_argument("--offset", type=int, default=0)
     commands.add_parser("inventory")
+    coords = commands.add_parser("index-coordinates")
+    coords.add_argument("kit", type=Path)
+    coords.add_argument("--password-prompt", action="store_true")
+    locate = commands.add_parser("scan-location")
+    locate.add_argument("model")
     args = parser.parse_args()
     if args.action == "build":
         password = getpass.getpass("CoStar kit ZIP password: ").encode() if args.password_prompt else None
@@ -221,6 +272,14 @@ if __name__ == "__main__":
             print(f"Indexed {build(args.db, args.kit, password)} properties")
         except (OSError, RuntimeError, ValueError, zipfile.BadZipFile) as error:
             parser.exit(1, f"Catalog import stopped: {error}\n")
+    elif args.action == "index-coordinates":
+        password = getpass.getpass("CoStar kit ZIP password: ").encode() if args.password_prompt else None
+        try:
+            index_property_coordinates(args.db, args.kit, password)
+        except (OSError, RuntimeError, ValueError, zipfile.BadZipFile) as error:
+            parser.exit(1, f"Coordinate import stopped: {error}\n")
+    elif args.action == "scan-location":
+        print(json.dumps(scan_location(args.db, args.model), indent=2))
     elif args.action == "inventory":
         print(json.dumps(inventory(args.db), indent=2))
     else:

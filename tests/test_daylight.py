@@ -64,7 +64,8 @@ class DaylightTest(unittest.TestCase):
             room = {"modelId": "Fixture", "outline": [[0, 0], [4, 0], [4, 4]],
                     "matterpakAlignmentVerified": True}
             alignment = Path(directory) / "legacy.json"
-            h.server = SimpleNamespace(room=lambda *_: room,
+            h.server = SimpleNamespace(database=Path(directory) / "missing.sqlite",
+                                       room=lambda *_: room,
                                        mesh_revision=lambda _: mesh,
                                        alignment_path=lambda *_: alignment)
             ref = {"model": "Fixture"}

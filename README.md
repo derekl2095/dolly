@@ -202,3 +202,12 @@ An obstruction beyond that distance is outside the study coverage.
 Run daylight backend tests with
 `python3 -m unittest discover -s tests -p test_daylight.py` and geometry checks
 with `node tests/check-daylight-geometry.mjs THREE_PACKAGE_DIR`.
+
+The server fills site latitude, longitude, and the known Houston or Los Angeles
+time zone from the linked CoStar property. For a portable database without
+coordinates, point the app at the extracted kit or run
+`python3 catalog.py index-coordinates KIT_PATH` (add `--password-prompt` for
+an encrypted kit). Use `python3 catalog.py scan-location MODEL_ID` to retrieve
+the same property ID and coordinates for the Vexcel coverage tooling. Site
+coordinates can seed a Vexcel query. The window's measured position, elevation,
+and true-north alignment remain independent of the property's geocode.

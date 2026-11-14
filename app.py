@@ -17,7 +17,7 @@ from urllib.parse import parse_qs, unquote, urlsplit
 
 import daylight
 
-from catalog import build, search_page, source_mode
+from catalog import build, coordinates_indexed, index_property_coordinates, scan_location, search_page, source_mode
 from fetch_matterpak import download_mesh, mesh_assets, stored_locally, unpack
 from import_room import DEFAULT_ASSETS, import_measured_room, import_rooms, read_model, valid_id
 from model_provider import configured, next_turn
@@ -190,7 +190,12 @@ class Handler(SimpleHTTPRequestHandler):
             status = ("missing" if calibrated is None else "ready"
                       if revision is not None and saved.get("revision") == revision else "stale")
             if not evaluate:
-                return self.respond(200, {"status": status, "revision": revision, "profile": calibrated})
+                try:
+                    site = scan_location(self.server.database, model)
+                except sqlite3.Error:
+                    site = None
+                return self.respond(200, {"status": status, "revision": revision, "profile": calibrated,
+                                          "locationDefaults": site})
             if status != "ready":
                 return self.respond(200, {"status": "unknown", "reason": status + " daylight calibration", "frames": []})
             actors = data.get("actors", [])
@@ -471,6 +476,12 @@ def main():
         else:
             coverage = "addresses and scan links" if starter_only else "full property records"
             print(f"Indexed {count} properties ({coverage}).", flush=True)
+    if not starter_only:
+        try:
+            if not coordinates_indexed(args.db):
+                index_property_coordinates(args.db, args.kit)
+        except (OSError, sqlite3.Error, ValueError) as error:
+            print(f"CoStar coordinates unavailable: {error}", flush=True)
     with ScoutServer(("127.0.0.1", args.port), args.db, args.assets) as server:
         print(f"Open http://127.0.0.1:{server.server_port}/", flush=True)
         server.serve_forever()
