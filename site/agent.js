@@ -80,7 +80,7 @@ export async function runAgent(brief, {activity, apply, lockedLens, allowApply, 
     "compare_setups ranks by constraint compliance, requested travel shortfall, sampled sightlines, rig clearance, and framing margin. Explain any choice that differs from that technical ranking using the crew’s stated preferences.",
     "Use rejection counts to select the next test. For framing failures, try another allowed lens or room. For sightline failures, consider shorter travel or another room. Treat a short or static fallback as a tradeoff and report its actual travel.",
     "Preserve the user's creative intent. apply_shot queues a proposal. The editor opens it after you finish. Describe it as queued.",
-    allowApply ? "You may open a checked proposal in the editor." : "Compare only. Applying is disabled.",
+    allowApply ? "Queue a qualifying proposal to honor the crew’s preferences. If you finish without queuing one, the top qualifying technical match opens automatically." : "Compare only. Applying is disabled.",
     lockedLens === null ? "The lens is adjustable." : `The lens is locked at ${lockedLens} mm.`,
   ].join(" ");
   const messages = [{role: "system", content: instructions}, {role: "user", content: brief}];
@@ -203,11 +203,18 @@ export async function runAgent(brief, {activity, apply, lockedLens, allowApply, 
     });
     const calls = response.tool_calls || [];
     if (!calls.length) {
+      const automatic = allowApply && !proposal;
+      if (automatic) {
+        const best = candidateReports().find(candidate => candidate.status === "qualifies");
+        if (best) proposal = candidates.get(best.id);
+      }
       if (proposal) {
         await apply(proposal.room, proposal.setup);
-        activity("Opened the checked proposal in the editor.");
+        publishEvidence();
+        activity(`Opened ${proposal.report.id} in the editor${automatic ? " as the top technical match" : ""}.`);
       }
-      return response.content || "The investigation finished.";
+      const summary = response.content || "The investigation finished.";
+      return automatic && proposal ? summary + ` Opened ${proposal.report.id}, the top qualifying technical match.` : summary;
     }
     if (calls.length > 4) throw Error("The model requested too many tools at once.");
     messages.push({role: "assistant", content: response.content ?? null, tool_calls: calls});

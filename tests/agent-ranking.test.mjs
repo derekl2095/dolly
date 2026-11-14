@@ -37,3 +37,27 @@ test("agent ranks qualifying results and rejects a below-minimum shot", async ()
   assert.deepEqual(evidence.candidates.at(-1).unmet, ["Minimum travel"]);
   assert.equal(opened.travel, 2);
 });
+
+test("agent opens a ranked candidate when authorized and the model skips selection", async () => {
+  for (const [allowApply, minimumTravel, expected] of [
+    [true, .5, 1], [false, .5, undefined], [true, 1.5, undefined],
+  ]) {
+    let opened;
+    let evidence;
+    const turns = [{
+      tool_calls: [{
+        id: "revise", function: {name: "revise_current_shot",
+          arguments: JSON.stringify({slide: 1, lens: null, cameraHeight: null, objective: "travel"})},
+      }],
+    }, {content: "Checked the shot."}];
+    await runAgent("Check a 1 m move", {
+      allowApply, minimumTravel, lockedLens: 35, current: {lens: 35, travel: 1},
+      activity() {}, onEvidence(value) { evidence = value; },
+      revise() { return {setup: {travel: 1}, reason: "Sampled setup"}; },
+      apply(_room, setup) { opened = setup.travel; },
+      async api() { return turns.shift(); },
+    });
+    assert.equal(opened, expected);
+    assert.equal(evidence.queued, expected === undefined ? undefined : "shot-1");
+  }
+});
