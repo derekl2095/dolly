@@ -10,9 +10,9 @@ export function alignMesh(mesh, room) {
 export function sightlineCheck(THREE, mesh, actors, cameraHeight) {
   const ray = new THREE.Raycaster();
   ray.near = .03;
-  return (from, to) => {
+  return (from, to, pointAt = t => from.map((value, index) => value + (to[index] - value) * t)) => {
     for (const t of [0, .25, .5, .75, 1]) {
-      const [x, z] = from.map((value, index) => value + (to[index] - value) * t);
+      const [x, z] = pointAt(t);
       const origin = new THREE.Vector3(x, cameraHeight, z);
       for (const [index, [ax, az]] of actors.entries()) {
         const direction = new THREE.Vector3(ax, 1.49, az).sub(origin);

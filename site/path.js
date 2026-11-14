@@ -101,6 +101,44 @@ export function pathFromEndpoints(start, end) {
   };
 }
 
+export const maxCurvePoints = 512;
+
+export function tracePath(points) {
+  if (!Array.isArray(points) || points.length < 2 || points.length > maxCurvePoints ||
+      !points.every(point => Array.isArray(point) && point.length === 2 &&
+        point.every(value => Number.isFinite(value) && Math.abs(value) <= 100000))) return null;
+  let travel = 0;
+  const segments = [];
+  for (let index = 1; index < points.length; index++) {
+    const from = points[index - 1], to = points[index];
+    const length = Math.hypot(to[0] - from[0], to[1] - from[1]);
+    if (length === 0) continue;
+    segments.push({from, to, length, start: travel});
+    travel += length;
+  }
+  if (travel < .01 || travel > 4 + 1e-8) return null;
+  return {
+    points, segments, travel,
+    at(fraction) {
+      const distance = Math.max(0, Math.min(1, fraction)) * travel;
+      const segment = segments.find(item => distance <= item.start + item.length) ?? segments.at(-1);
+      const t = (distance - segment.start) / segment.length;
+      return segment.from.map((value, axis) => value + (segment.to[axis] - value) * t);
+    },
+  };
+}
+
+export function roundStroke(points) {
+  if (points.length < 3) return points;
+  const rounded = [points[0]];
+  for (let index = 1; index < points.length; index++) {
+    const from = points[index - 1], to = points[index];
+    for (const weight of [.25, .75]) rounded.push(from.map((value, axis) => value + weight * (to[axis] - value)));
+  }
+  rounded.push(points.at(-1));
+  return rounded;
+}
+
 // Search nearby marks with the same aim and lens before reducing travel.
 export function findSlide(outline, center, aim, axis, distance, radius, keepMark, obstacles = [], accepts = () => true) {
   const steps = Math.floor(distance / .05 + 1e-7);
@@ -220,9 +258,18 @@ export function readShotExport(text) {
         item.min.every((value, index) => value < item.max[index]))) {
     throw Error("This file is not a supported shot export.");
   }
-  const path = pathFromEndpoints(shot.start, shot.end);
+  const curve = shot.pathPoints == null ? null : tracePath(shot.pathPoints);
+  if ((shot.pathPoints != null || shot.moveKind === "curve") &&
+      (!curve || shot.moveKind !== "curve" ||
+       !shot.start.every((value, axis) => value === curve.points[0][axis]) ||
+       !shot.end.every((value, axis) => value === curve.points.at(-1)[axis]))) {
+    throw Error("The exported curve is invalid or exceeds 4 m.");
+  }
+  const path = curve
+    ? {pathPoints: curve.points, mark: curve.at(.5), travel: curve.travel}
+    : pathFromEndpoints(shot.start, shot.end);
   if (path.travel > 4 + 1e-8) throw Error("The exported move is longer than 4 m.");
-  const moveKind = path.travel < 1e-8 ? "static"
+  const moveKind = curve ? "curve" : path.travel < 1e-8 ? "static"
     : ["slide", "push", "pull"].includes(shot.moveKind) ? shot.moveKind : "custom";
   return {modelId: shot.modelId, roomId: shot.roomId, setup: {
     ...path, travel: moveKind === "static" ? 0 : Math.min(path.travel, 4),

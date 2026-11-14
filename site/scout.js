@@ -1,12 +1,15 @@
-import {readShotExport} from "./path.js";
-import {parseProjectArchive, projectArchiveMaxBytes, readProjects, writeProject} from "./projects.js";
+import {maxCurvePoints, readShotExport, roundStroke} from "./path.js?v=5";
+import {parseProjectArchive, projectArchiveMaxBytes, readProjects, writeProject} from "./projects.js?v=5";
 import {loadObstacles, outlineMeasurements, roomKey} from "./room-state.js";
 import {briefSuggestions, runAgent} from "./agent.js";
 import {compareCapturedRooms} from "./compare.js";
-import {openMesh, closeMesh, currentShot, planCurrentShot, applyCurrentShot} from "./mesh.js";
+import {openMesh, closeMesh, currentShot, planCurrentShot, applyCurrentShot} from "./mesh.js?v=5";
 
 const form = document.querySelector("#scout-search");
 const results = document.querySelector("#results");
+const workspace = document.querySelector("#workspace");
+const roomTitle = document.querySelector("#room-title");
+const roomPanel = roomTitle.closest("aside");
 const status = document.querySelector("#status");
 const roomStatus = document.querySelector("#room-status");
 const canvas = document.querySelector("#plan");
@@ -14,6 +17,25 @@ let roomRequest;
 let selectedRoom;
 const roomPicker = document.querySelector("#room-picker");
 const roomOptions = roomPicker.querySelector("select");
+
+function roomName(label, id) {
+  const name = label?.trim();
+  return !name || name === id || name === `Room ${id}` ? "Room" : name;
+}
+
+function roomNames(choices) {
+  const names = choices.map(({label, id}) => roomName(label, id));
+  const totals = new Map();
+  const numbers = new Map();
+  for (const name of names) totals.set(name, (totals.get(name) || 0) + 1);
+  return names.map(name => {
+    if (totals.get(name) === 1) return name;
+    const number = (numbers.get(name) || 0) + 1;
+    numbers.set(name, number);
+    return `${name} ${number}`;
+  });
+}
+
 document.querySelector("#retry-mesh").addEventListener("click", async () => {
   if (!selectedRoom || !roomRequest) return;
   closeMesh();
@@ -76,6 +98,9 @@ let drawPlan;
 let toWorld;
 let pose;
 let draft;
+let drawing = false;
+let stroke;
+let strokePointer;
 let obstacles = [];
 let obstacleKey;
 let marking = false;
@@ -84,12 +109,23 @@ const markButton = document.querySelector("#mark-obstacle");
 const undoButton = document.querySelector("#undo-obstacle");
 const instructions = document.querySelector("#plan-instructions");
 const tools = document.querySelector("#plan-tools");
+const drawCurve = document.querySelector("#draw-curve");
 function setMarking(enabled) {
   marking = enabled;
   draft = undefined;
   markButton.setAttribute("aria-pressed", String(enabled));
   instructions.textContent = enabled ? "Drag around the furniture footprint."
     : "Click the plan to place the selected mark.";
+  drawPlan?.(pose);
+}
+
+function setDrawing(enabled) {
+  setMarking(false);
+  drawing = enabled;
+  stroke = undefined;
+  strokePointer = undefined;
+  drawCurve.setAttribute("aria-pressed", String(enabled));
+  if (enabled) instructions.textContent = "Drag from the start to the end of the camera move. Release to play.";
   drawPlan?.(pose);
 }
 
@@ -102,7 +138,16 @@ function publishObstacles() {
   drawPlan?.(pose);
 }
 
-markButton.addEventListener("click", () => setMarking(!marking));
+drawCurve.addEventListener("click", () => setDrawing(!drawing));
+markButton.addEventListener("click", () => {
+  const enabled = !marking;
+  setDrawing(false);
+  setMarking(enabled);
+});
+placeMark.addEventListener("change", () => setDrawing(false));
+document.addEventListener("keydown", event => {
+  if (event.key === "Escape" && drawing) setDrawing(false);
+});
 undoButton.addEventListener("click", () => {
   obstacles.pop();
   publishObstacles();
@@ -114,6 +159,13 @@ canvas.addEventListener("shotmounted", () => {
 canvas.addEventListener("pointerdown", event => {
   if (document.querySelector("#viewport").hidden || !toWorld || event.button !== 0) return;
   const point = toWorld(event);
+  if (drawing) {
+    if (stroke) return;
+    canvas.setPointerCapture(event.pointerId);
+    strokePointer = event.pointerId;
+    stroke = [point];
+    return;
+  }
   if (!marking) {
     if (placeMark.value === "camera") {
       canvas.dispatchEvent(new CustomEvent("choosecamera", {detail: point}));
@@ -130,11 +182,25 @@ canvas.addEventListener("pointerdown", event => {
   draft = [point, point];
 });
 canvas.addEventListener("pointermove", event => {
+  if (stroke && event.pointerId === strokePointer) {
+    const point = toWorld(event);
+    const previous = stroke.at(-1);
+    if (stroke.length < maxCurvePoints / 2 - 1 &&
+        Math.hypot(point[0] - previous[0], point[1] - previous[1]) >= .015) stroke.push(point);
+    drawPlan?.(pose);
+    return;
+  }
   if (!draft || !toWorld) return;
   draft[1] = toWorld(event);
   drawPlan?.(pose);
 });
 canvas.addEventListener("pointerup", event => {
+  if (stroke && event.pointerId === strokePointer) {
+    const path = roundStroke([...stroke, toWorld(event)]);
+    setDrawing(false);
+    canvas.dispatchEvent(new CustomEvent("drawcamera", {detail: path}));
+    return;
+  }
   if (!draft || !toWorld) return;
   const [a, b] = draft;
   const min = a.map((value, i) => Math.min(value, b[i]));
@@ -145,7 +211,7 @@ canvas.addEventListener("pointerup", event => {
   setMarking(false);
   publishObstacles();
 });
-canvas.addEventListener("pointercancel", () => setMarking(false));
+canvas.addEventListener("pointercancel", () => setDrawing(false));
 document.querySelector("#viewport").addEventListener("shotpose", event => {
   pose = event.detail;
   drawPlan?.(pose);
@@ -190,7 +256,7 @@ function card(row, readiness = {}) {
   }
   const scans = element("select", "");
   scans.setAttribute("aria-label", "Scan for " + (row.name || row.street));
-  for (const [id, caption] of models) {
+  for (const [index, [id, caption]] of models.entries()) {
     const scan = readiness[id];
     let status = "Local status unknown";
     if (scan) {
@@ -199,10 +265,13 @@ function card(row, readiness = {}) {
       else if (scan.roomCount) status = "Room outline only";
       else status = "Room import needed";
     }
-    scans.add(new Option((caption || id) + " · " + status, id));
+    scans.add(new Option((caption?.trim() || `Scan ${index + 1}`) + " · " + status, id));
   }
   const inspect = element("button", "Inspect room");
-  inspect.addEventListener("click", () => inspectRoom(row, scans.value));
+  inspect.addEventListener("click", () => {
+    void inspectRoom(row, scans.value);
+    roomTitle.focus();
+  });
   const pin = element("button", "Shortlist scan");
   pin.addEventListener("click", () => {
     const modelId = scans.value;
@@ -214,11 +283,15 @@ function card(row, readiness = {}) {
       status.textContent = "Remove a scan before adding another to the shortlist.";
       return;
     }
-    shortlist.push({modelId, label: row.name || row.street, caption: row.models[modelId] || modelId});
+    shortlist.push({modelId, label: row.name || row.street, caption:
+      row.models[modelId]?.trim() || `Scan ${scans.selectedIndex + 1}`});
     shortlistPanel.open = true;
     renderShortlist();
   });
-  article.append(scans, document.createElement("br"), inspect, pin);
+  const actions = element("div", "");
+  actions.className = "location-actions";
+  actions.append(inspect, pin);
+  article.append(scans, actions);
   return article;
 }
 
@@ -257,6 +330,7 @@ function enableMeasuredImport(row, model, signal) {
 }
 
 async function inspectRoom(row, model, roomId, proposedShot) {
+  roomPanel.hidden = false;
   roomRequest?.abort();
   measuredRoom.hidden = true;
   uploadMesh.hidden = true;
@@ -274,18 +348,18 @@ async function inspectRoom(row, model, roomId, proposedShot) {
   placeMark.value = "camera";
   obstacles = [];
   obstacleKey = undefined;
-  setMarking(false);
-  roomStatus.textContent = "Looking for imported room " + model + "…";
+  setDrawing(false);
+  roomStatus.textContent = "Looking for imported rooms…";
   try {
     const params = new URLSearchParams({model});
     const choices = await fetch("/api/rooms?" + params, {signal: request.signal}).then(response =>
       response.ok ? response.json() : []);
     if (request.signal.aborted) return;
     enableMeasuredImport(row, model, request.signal);
+    const names = roomNames(choices);
     if (choices.length > 1) {
       const selected = choices.findIndex(choice => choice.id === (roomId ?? choices[0].id));
-      roomOptions.replaceChildren(...choices.map((choice, index) =>
-        new Option(choice.label + (choice.floorId ? " · " + choice.floorId : ""), String(index))));
+      roomOptions.replaceChildren(...names.map((name, index) => new Option(name, String(index))));
       roomOptions.selectedIndex = Math.max(selected, 0);
       roomOptions.onchange = () => inspectRoom(row, model, choices[roomOptions.selectedIndex].id);
       roomPicker.hidden = false;
@@ -331,7 +405,8 @@ async function inspectRoom(row, model, roomId, proposedShot) {
     }
     obstacleKey = "scout-obstacles:" + roomKey(data);
     obstacles = proposedShot?.obstacles ? structuredClone(proposedShot.obstacles) : loadObstacles(data);
-    if (data.label) document.querySelector("#room-title").textContent = data.label;
+    const roomIndex = choices.findIndex(choice => choice.id === (data.roomId ?? null));
+    document.querySelector("#room-title").textContent = names[roomIndex] || roomName(data.label, data.roomId);
     renderRoom(data);
     if (data.capturePlan) {
       const image = capture.querySelector("img");
@@ -404,14 +479,17 @@ function renderRoom(room) {
       context.fillRect(x, z, endX - x, endZ - z);
       context.strokeRect(x, z, endX - x, endZ - z);
     }
-    if (pose) {
+    if (stroke || pose) {
+      const path = stroke || pose.pathPoints || [pose.from, pose.to];
       context.beginPath();
-      context.moveTo(...coords(pose.from));
-      context.lineTo(...coords(pose.to));
-      context.strokeStyle = document.querySelector("#clearance").dataset.result === "fail"
+      path.forEach((point, index) => context[index ? "lineTo" : "moveTo"](...coords(point)));
+      context.strokeStyle = !stroke && document.querySelector("#clearance").dataset.result === "fail"
         ? "#ff8b82" : "#f1b87b";
       context.lineWidth = 5;
+      context.lineJoin = context.lineCap = "round";
       context.stroke();
+    }
+    if (pose) {
       context.beginPath();
       context.moveTo(...coords([pose.x, pose.z]));
       context.lineTo(...coords([pose.tx, pose.tz]));
@@ -421,7 +499,7 @@ function renderRoom(room) {
       context.setLineDash([]);
       const [aimX, aimZ] = coords([pose.tx, pose.tz]);
       context.strokeRect(aimX - 6, aimZ - 6, 12, 12);
-      if (Math.hypot(pose.to[0] - pose.from[0], pose.to[1] - pose.from[1]) > .01) {
+      if (pose.pathPoints || Math.hypot(pose.to[0] - pose.from[0], pose.to[1] - pose.from[1]) > .01) {
         context.fillStyle = "#f4d9b8";
         context.font = "bold 15px system-ui";
         for (const [label, point] of [["START", pose.from], ["END", pose.to]]) {
@@ -453,7 +531,7 @@ function renderRoom(room) {
   const source = room.geometrySource || "Imported outline";
   roomStatus.textContent = source + " · " + width.toFixed(2) + " m × " +
     depth.toFixed(2) + " m bounds · " + outlineMeasurements(points).area.toFixed(1) +
-    " m² outline area · " + room.modelId;
+    " m² outline area";
 }
 
 const moreLocations = document.querySelector("#more-locations");
@@ -468,6 +546,7 @@ function resetLocationSearch() {
 }
 
 async function loadLocationPage(filters) {
+  workspace.dataset.searched = "";
   searchRequest?.abort();
   const request = new AbortController();
   searchRequest = request;
@@ -557,7 +636,7 @@ comparison.addEventListener("submit", async event => {
       : scoped ? "None of the shortlisted scans has an imported outline." : "Import a Matterport room to begin.";
     for (const item of ranked) {
       const card = element("article", "");
-      const label = item.room.label || item.room.modelId;
+      const label = roomName(item.room.label, item.room.roomId);
       card.append(element("h3", label), element("p", item.reason));
       if (item.setup) card.append(element("p",
         Math.floor(item.clearanceMargin * 100) + " cm beyond the rig radius · " +
@@ -608,7 +687,7 @@ function refreshProjects() {
 function renderHistory() {
   projectHistory.hidden = !revisionHistory.length;
   projectHistory.querySelector("ol").replaceChildren(...revisionHistory.map(item => {
-    const entry = element("li", item.brief + " · " + (item.selection?.label || "Room"));
+    const entry = element("li", item.brief + " · " + roomName(item.selection?.label, item.selection?.roomId));
     const restore = element("button", "Open revision");
     restore.disabled = projectLocked;
     restore.addEventListener("click", () => {
@@ -635,6 +714,7 @@ function selectionSnapshot() {
 async function restoreSelection(selection) {
   if (selection) return inspectRoom({name: selection.label || selection.modelId},
     selection.modelId, selection.roomId, selection.shot);
+  roomPanel.hidden = true;
   roomRequest?.abort();
   measuredRoom.hidden = true;
   uploadMesh.hidden = true;
@@ -644,6 +724,7 @@ async function restoreSelection(selection) {
   closeMesh();
   roomPicker.hidden = canvas.hidden = capture.hidden = tools.hidden = true;
   drawPlan = toWorld = pose = undefined;
+  setDrawing(false);
   document.querySelector("#room-title").textContent = "Room plan";
   roomStatus.textContent = "Select a linked scan to inspect its imported geometry.";
   const url = new URL(location.href);
@@ -978,8 +1059,8 @@ agentForm.addEventListener("submit", async event => {
   agentResult.textContent = "Investigating the shot…";
   try {
     const prior = initialRoom
-      ? " Current editor: " + (initialRoom.label || initialRoom.modelId) +
-        " (model " + initialRoom.modelId + "). Lens: " + document.querySelector("#lens").value + " mm."
+      ? " Current editor: " + roomName(initialRoom.label, initialRoom.roomId) +
+        ". Lens: " + document.querySelector("#lens").value + " mm."
       : "";
     agentResult.textContent = await runAgent(constraints.brief + prior, {
       ...constraints,
@@ -1005,11 +1086,11 @@ agentForm.addEventListener("submit", async event => {
         if (candidates.length) {
           const list = element("ol", "");
           for (const candidate of candidates) {
-            const {id, label, model, status, outcome, unmet, travel, requested,
+            const {id, label, room, status, outcome, unmet, travel, requested,
               clearanceMargin, framingMargin, sightlinesSampled, missingEvidence} = candidate;
             const entry = element("li", "");
             entry.dataset.candidate = id;
-            entry.append(element("strong", [label || model || id,
+            entry.append(element("strong", [roomName(label, room),
               id === recommended ? "Top technical match" : status.replace("missing-evidence", "Missing evidence"),
               id === queued ? "Selected proposal" : ""].filter(Boolean).join(" · ")));
             entry.append(element("p", outcome));
@@ -1032,8 +1113,8 @@ agentForm.addEventListener("submit", async event => {
             const entry = element("li", [lead.name, lead.city,
               lead.models.length ? "Room outline not confirmed" : "No linked scan"].filter(Boolean).join(" · "));
             if (lead.evidence) entry.append(element("p", lead.evidence));
-            for (const scan of lead.scans) {
-              const open = element("button", "Inspect " + (scan.caption || scan.model));
+            for (const [index, scan] of lead.scans.entries()) {
+              const open = element("button", "Inspect " + (scan.caption?.trim() || `scan ${index + 1}`));
               open.type = "button";
               open.addEventListener("click", () => inspectRoom({name: lead.name || scan.model}, scan.model));
               entry.append(open);
