@@ -316,3 +316,32 @@ test("a provider failure clears an unapplied proposal and keeps the active shot"
   assert.equal(evidence.queued, undefined);
   assert.equal(evidence.recommended, "shot-1");
 });
+
+test("continuing a catalog search preserves hard filters and includes later leads", async () => {
+  let turn = 0;
+  let evidence;
+  const calls = ["search_locations", "continue_location_search"];
+  const offsets = [];
+  await runAgent("Find a Houston office", {
+    catalogFilters: {city: "Houston", category: "office"}, activity() {},
+    onEvidence(value) { evidence = value; },
+    async api(path) {
+      if (path.startsWith("/api/locations?")) {
+        const params = new URL(path, "http://localhost").searchParams;
+        assert.equal(params.get("city"), "Houston");
+        assert.equal(params.get("category"), "office");
+        assert.equal(params.get("q"), "showroom");
+        assert.equal(params.get("limit"), "6");
+        const offset = Number(params.get("offset") ?? 0);
+        offsets.push(offset);
+        return {rows: [{property_id: offset + 1, models: {}}],
+          mode: "full", next_offset: offset ? null : 6};
+      }
+      if (turn === calls.length) return {content: "Found two leads."};
+      const name = calls[turn++];
+      return {tool_calls: [{id: name, function: {name, arguments: '{"query":"showroom"}'}}]};
+    },
+  });
+  assert.deepEqual(offsets, [0, 6]);
+  assert.deepEqual(evidence.unverifiedLeads.map(lead => lead.id), [1, 7]);
+});

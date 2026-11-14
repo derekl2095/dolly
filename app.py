@@ -15,7 +15,7 @@ from pathlib import Path
 from urllib.error import URLError
 from urllib.parse import parse_qs, unquote, urlsplit
 
-from catalog import build, search, source_mode
+from catalog import build, search_page, source_mode
 from fetch_matterpak import download_mesh, mesh_assets, unpack
 from import_room import DEFAULT_ASSETS, import_measured_room, import_rooms, read_model, valid_id
 from model_provider import configured, next_turn
@@ -312,16 +312,21 @@ class Handler(SimpleHTTPRequestHandler):
                 imported_models = None
                 if params.get("imported", [""])[0] == "1":
                     imported_models = {room["modelId"] for room in self.server.imported_rooms()}
-                rows = search(self.server.database, params.get("q", [""])[0][:240],
+                page = search_page(self.server.database, params.get("q", [""])[0][:240],
+                              offset=int(params.get("offset", ["0"])[0]),
+                              limit=int(params.get("limit", ["12"])[0]),
                               city=params.get("city", [""])[0][:80],
                               category=params.get("category", [""])[0][:80],
                               linked_only=params.get("linked", [""])[0] == "1", imported_models=imported_models)
+                rows = page["results"]
                 mode = source_mode(self.server.database)
+            except ValueError as error:
+                return self.respond(400, {"error": str(error)})
             except sqlite3.Error:
                 return self.respond(503, {"error": "The full CoStar catalog is unavailable."})
             models = {model for row in rows for model in row["models"]}
             readiness = {model: self.server.scan_readiness(model) for model in models}
-            return self.respond(200, {"rows": rows, "mode": mode, "scanReadiness": readiness})
+            return self.respond(200, {"rows": rows, "mode": mode, "scanReadiness": readiness, "next_offset": page["next_offset"]})
         if url.path == "/api/imported-rooms":
             return self.respond(200, self.server.imported_rooms())
         if url.path == "/api/rooms":
