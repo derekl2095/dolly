@@ -67,7 +67,7 @@ export async function runAgent(brief, {activity, apply, lockedLens = null, locke
       const unmet = [];
       if (setup && lockedMove && (setup.travel === 0 ? "static" : report.move) !== lockedMove)
         unmet.push("Camera move lock");
-      if (setup?.travel < minimumTravel) unmet.push("Minimum travel");
+      if (setup && setup.travel + 1e-8 < minimumTravel) unmet.push("Minimum travel");
       if (setup && requireSightlines && !report.sightlinesSampled) unmet.push("Captured sightlines");
       if (setup && lockedRoom && room) unmet.push("Current room lock");
       const status = !setup ? "failed" : unmet.length ? "fallback" : "qualifies";
@@ -205,7 +205,7 @@ export async function runAgent(brief, {activity, apply, lockedLens = null, locke
         const report = {id, label: room.label, model: room.modelId, room: room.roomId || null, requested: args.slide,
           lens: args.lens, move, sensorWidthMm: result.setup?.sensorWidthMm ?? null,
           cameraHeight: result.setup?.cameraHeight ?? null, rigRadius: result.setup?.rigRadius ?? null, travel: result.length >= 0 ? result.length : null,
-          outcome: result.reason, evaluation: result.evaluation, ceiling: result.ceiling, clearanceMargin: result.clearanceMargin, framingMargin: result.framingMargin,
+          outcome: result.reason, solverStatus: result.status, missingEvidence: result.missing, evaluation: result.evaluation, ceiling: result.ceiling, clearanceMargin: result.clearanceMargin, framingMargin: result.framingMargin,
           markedObstacles: result.markedObstacles, sightlinesSampled: result.sightlinesSampled,
           unverified: result.sightlinesSampled ? ["unmarked furniture"] : ["unmarked furniture", "captured sightlines"]};
         candidates.set(id, {room, setup: result.setup, report});
@@ -243,7 +243,7 @@ export async function runAgent(brief, {activity, apply, lockedLens = null, locke
         if (!item?.setup) throw Error("Choose a candidate that passed the available checks.");
         const actualMove = item.setup.travel === 0 ? "static" : item.report.move;
         if (lockedMove && actualMove !== lockedMove) throw Error("This setup does not match the locked camera move.");
-        if (item.setup.travel < minimumTravel)
+        if (item.setup.travel + 1e-8 < minimumTravel)
           throw Error(`This setup is below the ${minimumTravel} m minimum travel.`);
         if (requireSightlines && !item.report.sightlinesSampled) throw Error("Captured sightlines are required.");
         if (lockedRoom && item.room) throw Error("The current room is locked. Use revise_current_shot.");
