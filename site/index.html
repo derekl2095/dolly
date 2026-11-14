@@ -54,7 +54,7 @@ select {max-width:100%} canvas {width:100%;display:block;margin-top:12px;backgro
 #transport input[type="range"] {width:90px;padding:0}
 @media(max-width:700px){.layout{grid-template-columns:1fr}}
 </style>
-<link rel="stylesheet" href="scout-studio.css?v=8">
+<link rel="stylesheet" href="scout-studio.css?v=9">
 </head>
 <body><main>
 <header class="studio-header">
@@ -115,7 +115,7 @@ select {max-width:100%} canvas {width:100%;display:block;margin-top:12px;backgro
 <label><input name="require-sightlines" type="checkbox"> Require captured sightlines for agent proposals</label>
 <label><input name="shortlist-only" type="checkbox"> Scout shortlisted scans only</label>
 <label><input name="lock-room" type="checkbox"> Lock current room</label>
-<label><input name="import-outlines" type="checkbox"> Allow the agent to fetch missing Matterport room outlines</label>
+<label><input name="import-outlines" type="checkbox"> Allow the agent to fetch room outlines and MatterPaks</label>
 <label><input name="apply" type="checkbox" checked> Open checked proposal</label>
 <p>Catalog searches use the city and property type selected above.</p>
 <button type="button" id="suggest-constraints">Fill lens and travel from brief</button>
@@ -195,7 +195,7 @@ select {max-width:100%} canvas {width:100%;display:block;margin-top:12px;backgro
 <p id="render-status" role="status"></p>
 </div>
 <div class="blocking">
-<canvas id="plan" width="720" height="500" hidden aria-label="Scaled room outline. Click to place the selected mark"></canvas>
+<canvas id="plan" width="720" height="500" hidden aria-label="Scaled room outline. Drag actor marks or click to place the selected mark"></canvas>
 <p id="rig-width" hidden></p>
 <div id="plan-tools" hidden>
 <button id="draw-curve" type="button" aria-pressed="false">Draw curve</button>
@@ -203,7 +203,7 @@ select {max-width:100%} canvas {width:100%;display:block;margin-top:12px;backgro
 <button id="center-aim" type="button">Aim at actors</button>
 <button id="mark-obstacle" type="button" aria-pressed="false">Mark furniture</button>
 <button id="undo-obstacle" type="button" disabled>Undo last mark</button>
-<p id="plan-instructions">Click the plan to place the selected mark.</p>
+<p id="plan-instructions">Drag A1 or A2 to move an actor. Click empty space to place the selected mark.</p>
 </div>
 </div></div>
 <div class="shot-evidence"><p id="clearance" role="status"></p><p id="ceiling" role="status"></p><p id="framing" role="status"></p><p id="sightline" role="status"></p>
@@ -235,6 +235,25 @@ select {max-width:100%} canvas {width:100%;display:block;margin-top:12px;backgro
 <button id="import-mesh" type="button" hidden>Import MatterPak</button>
 <label id="upload-mesh" hidden>Use a MatterPak ZIP <input type="file" accept=".zip,application/zip"></label>
 <button id="retry-mesh" type="button" hidden>Retry captured mesh</button>
+<details id="daylight" hidden>
+<summary>Direct sunlight</summary>
+<form>
+<label>Latitude <input name="latitude" type="number" min="-90" max="90" step="any" required></label>
+<label>Longitude <input name="longitude" type="number" min="-180" max="180" step="any" required></label>
+<label>Time zone <input name="timeZone" placeholder="America/Chicago" required></label>
+<p id="daylight-location-source"></p>
+<label>True bearing of plan +z <input name="heading" type="number" min="0" max="360" step="any" required></label>
+<label><input type="checkbox" name="pick"> Pick four window corners in perimeter order on the scan</label>
+<button type="button" id="detect-windows">Detect windows</button>
+<ul id="window-candidates"></ul>
+<label>Window measurements <textarea name="windows" rows="6" required></textarea></label>
+<button>Save daylight calibration</button>
+<label>Study date <input name="date" type="date" required></label>
+<label><input name="show" type="checkbox"> Show simulated sunlight</label>
+<label>Time <input type="range" min="0" max="96" step="1" value="48"></label>
+<p role="status"></p>
+</form>
+</details>
 <details id="capture" hidden>
 <summary>Captured floor plan</summary>
 <img alt="Photographic floor plan captured by Matterport">
@@ -242,4 +261,4 @@ select {max-width:100%} canvas {width:100%;display:block;margin-top:12px;backgro
 </div>
 </main>
 <script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"}}</script>
-<script type="module" src="scout.js?v=8"></script></body></html>
+<script type="module" src="scout.js?v=9"></script></body></html>

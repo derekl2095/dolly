@@ -72,8 +72,8 @@ function updateStatus() {
   }
   const count = pins.getLayers().length;
   status.textContent = cityPicker.value
-    ? `${count} of ${total} loaded properties mapped in ${cityPicker.value} · Approximate addresses`
-    : count ? `${count} of ${total} loaded properties mapped · Approximate addresses`
+    ? `${count} of ${total} loaded properties mapped in ${cityPicker.value}`
+    : count ? `${count} of ${total} loaded properties mapped`
     : failed ? "Address lookup is temporarily unavailable." : "No matching addresses could be mapped.";
 }
 
@@ -124,7 +124,9 @@ export async function addMapLocations(rows, cards) {
             map.closePopup();
             cards[item].focus();
           });
-          popup.append(title, button);
+          const source = document.createElement("small");
+          source.textContent = position.approximate ? "Approximate street address" : "CoStar property coordinates";
+          popup.append(title, source, button);
           const marker = L.marker([position.latitude, position.longitude], {
             title: label, alt: label,
             icon: L.divIcon({className: "scout-map-pin", iconSize: [16, 16], iconAnchor: [8, 8]}),

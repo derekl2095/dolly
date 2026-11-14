@@ -6,8 +6,13 @@ const definitions = [
   ["continue_location_search", "Fetch the next page of the last successful catalog search with the same filters.", {}],
   ["inspect_location", "Check whether a linked model has imported rooms.", {model: {type: "string"}}],
   ["import_capture_outline", "Fetch room geometry for a discovered Matterport scan when authorized.", {model: {type: "string"}}],
+  ["prepare_capture", "Fetch the existing MatterPak for an inspected scan with room outlines. Reports download availability; room alignment still needs separate evidence.", {model: {type: "string"}}],
   ["get_room_evidence", "Read a room's imported dimensions and staging evidence.",
     {model: {type: "string"}, room: {type: ["string", "null"]}}],
+  ["study_daylight", "Check sun and exterior exposure for an inspected room. Actor aperture tests do not include interior occlusion.", {
+    model: {type: "string"}, room: {type: ["string", "null"]},
+    start: {type: "string"}, end: {type: "string"}, stepMinutes: {type: "integer"},
+  }],
   ["evaluate_shot", "Test a lens and camera move in an inspected room. Returns a candidate ID.",
     {model: {type: "string"}, room: {type: ["string", "null"]},
      lens: {type: "integer"}, slide: {type: "number"}, requireSightlines: {type: "boolean"}, move: {type: "string", enum: ["slide", "push", "pull", "static"]}}],
@@ -61,7 +66,26 @@ export async function runAgent(brief, {activity, apply, lockedLens = null, locke
   const inspected = new Map();
   const importAttempts = new Set();
   const importErrors = new Map();
-  const availableTools = allowImport ? tools : tools.filter(tool => tool.function.name !== "import_capture_outline");
+  const captureAttempts = new Map();
+  const importTools = new Set(["import_capture_outline", "prepare_capture"]);
+  const availableTools = allowImport ? tools : tools.filter(tool => !importTools.has(tool.function.name));
+
+  async function prepareCapture(model, meshAvailable = false) {
+    if (!allowImport) throw Error("Matterport imports are disabled for this investigation.");
+    if (!seen.has(model) || !(inspected.get(model) > 0))
+      throw Error("Inspect a discovered scan with room outlines first.");
+    if (meshAvailable) return {meshAvailable: true, cached: true};
+    if (!captureAttempts.has(model)) {
+      if (captureAttempts.size >= 2) throw Error("This investigation can prepare MatterPaks for up to two scans.");
+      activity(`Preparing the captured 3D scene for scan ${model}.`);
+      captureAttempts.set(model, api("/api/import-matterpak", {
+        method: "POST", headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({model}),
+      }));
+    }
+    const result = await captureAttempts.get(model);
+    return {meshAvailable: true, cached: result.cached};
+  }
   function candidateReports() {
     const rank = {qualifies: 0, fallback: 1, "missing-evidence": 2, failed: 3};
     return [...candidates.values()].map(({room, setup, report}) => {
@@ -110,7 +134,7 @@ export async function runAgent(brief, {activity, apply, lockedLens = null, locke
       ? `Catalog filters are fixed for this run: ${JSON.stringify(catalogFilters)}.` : "",
     "Use exact city for hard geography constraints. Supported category strings include office, industrial warehouse, flex, retail, hotel hospitality, apartment multifamily, and land. Send null when a filter is flexible.",
     "For a follow-up about the open shot, prefer revise_current_shot. Use null for values the user wants to preserve.",
-    allowImport ? "If a promising scan lacks imported rooms, you may fetch its outlines. Inspect the scan before and after importing." : "",
+    allowImport ? "If a promising scan lacks imported rooms, fetch its outlines and inspect again. Use prepare_capture for promising scans where mesh availability is uncertain. The editor will automatically prepare the best qualifying setup and try the next qualifying scan if its MatterPak is unavailable." : "",
     requireSightlines ? "Every applied candidate must pass sampled captured sightlines." : "",
     targetTravel !== null ? `The crew prefers ${targetTravel} m of travel. Rank retries against that same target.` : "",
     minimumTravel > 0 ? `Minimum travel is ${minimumTravel} m. A shorter fallback may be reported but cannot be applied.` : "",
@@ -195,19 +219,41 @@ export async function runAgent(brief, {activity, apply, lockedLens = null, locke
           throw error;
         }
       }
+      case "prepare_capture":
+        return prepareCapture(args.model);
       case "get_room_evidence": {
         if (!seen.has(args.model)) throw Error("Search for this model first.");
         const params = new URLSearchParams({model: args.model});
         if (args.room != null) params.set("room", args.room);
         const room = await api("/api/room?" + params);
         rooms.set(key(args.model, args.room ?? null), room);
+        if (!inspected.get(args.model)) inspected.set(args.model, 1);
         activity(`Read the imported boundary and staging for ${room.label || room.modelId}.`);
         const {xSpan, zSpan, area} = outlineMeasurements(room.outline);
         return {label: room.label, outlineMeters: {xSpan, zSpan, areaSquareMeters: area}, vertices: room.outline.length, height: room.heightEstimated ? null : room.height,
           actors: actorMarks(room, loadShot(room)).filter(Boolean).length, source: room.geometrySource || "Imported Matterport outline",
           staging: room.staging || "provisional",
+          meshAvailable: room.matterpakAvailable === true || undefined,
           meshAlignmentVerified: room.matterpakAlignmentVerified === true,
           alignmentEvidence: room.alignmentEvidence};
+      }
+      case "study_daylight": {
+        const room = rooms.get(key(args.model, args.room ?? null));
+        if (!room) throw Error("Read the room evidence first.");
+        const start = Date.parse(args.start);
+        const end = Date.parse(args.end);
+        if (!Number.isFinite(start) || !Number.isFinite(end) || end < start ||
+            !Number.isInteger(args.stepMinutes) || args.stepMinutes < 1 ||
+            (end - start) / (args.stepMinutes * 60000) >= 24)
+          throw Error("Use an offset timestamp range with at most 24 samples.");
+        const actors = actorMarks(room, loadShot(room)).filter(Boolean).map(([x, z]) => [x, 1.49, z]);
+        const result = await api("/api/daylight-study", {
+          method: "POST", headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({model: room.modelId, room: room.roomId ?? null, start: args.start,
+            end: args.end, stepMinutes: args.stepMinutes, actors}),
+        });
+        activity("Checked daylight evidence for " + (room.label || room.modelId) + ".");
+        return {...result, interiorOcclusion: "Use the editor to verify interior occlusion before claiming direct actor light."};
       }
       case "evaluate_shot": {
         const room = rooms.get(key(args.model, args.room ?? null));
@@ -309,13 +355,47 @@ export async function runAgent(brief, {activity, apply, lockedLens = null, locke
         const best = candidateReports().find(candidate => candidate.status === "qualifies");
         if (best) proposal = candidates.get(best.id);
       }
-      if (proposal) {
+      const preferred = proposal;
+      let captureFailure = false;
+      if (proposal && allowImport) {
+        const ranked = candidateReports().filter(candidate => candidate.status === "qualifies")
+          .map(candidate => candidates.get(candidate.id));
+        const attemptedModels = new Set();
+        proposal = undefined;
+        for (const item of new Set([preferred, ...ranked])) {
+          const model = item.room?.modelId;
+          if (model && attemptedModels.has(model)) continue;
+          if (model) {
+            attemptedModels.add(model);
+            try {
+              await prepareCapture(model, item.room.matterpakAvailable === true);
+            } catch (error) {
+              captureFailure = true;
+              activity(`Could not prepare scan ${model}: ${error.message}`);
+              continue;
+            }
+          }
+          try {
+            await apply(item.room, item.setup, Boolean(model));
+            proposal = item;
+            break;
+          } catch (error) {
+            if (error.code !== "capture-unavailable") throw error;
+            captureFailure = true;
+            activity(`Could not display scan ${model}: ${error.message}`);
+          }
+        }
+      } else if (proposal) {
         await apply(proposal.room, proposal.setup);
-        publishEvidence();
-        activity(`Opened ${proposal.report.id} in the editor${automatic ? " as the top technical match" : ""}.`);
       }
+      if (proposal) activity(`Opened ${proposal.report.id} in the editor.`);
+      publishEvidence();
       publishAlternatives();
       const summary = response.content || "The investigation finished.";
+      if (captureFailure && !proposal) return summary +
+        " None of the attempted captured scenes could open. Your editor was kept. Review the tested setups and import details below.";
+      if (captureFailure && proposal) return summary +
+        ` Opened ${proposal.report.id} after a higher-priority scan could not supply its MatterPak.`;
       return automatic && proposal ? summary + ` Opened ${proposal.report.id}, the top qualifying technical match.` : summary;
     }
     if (calls.length > 4) return finishIncomplete("The model requested too many tools at once.");

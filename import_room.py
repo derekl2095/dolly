@@ -17,6 +17,58 @@ QUERY = """query Room($id: ID!) { model(id: $id) {
 } }"""
 
 
+OPENINGS_QUERY = """query Openings($id: ID!) { model(id: $id) {
+  id rooms { id boundary { edges { type
+    vertices { position { x y } }
+    openings { id type width height lowerElevation relativeCenter }
+  } } }
+} }"""
+
+
+def opening_candidates(room, outline_points, floor_height):
+    winding = sum(a[0]*b[1] - a[1]*b[0]
+                  for a, b in zip(outline_points, outline_points[1:] + outline_points[:1]))
+    candidates = []
+    for edge in (room.get("boundary") or {}).get("edges") or []:
+        if edge.get("type") != "wall":
+            continue
+        try:
+            a, b = [(v["position"]["x"], v["position"]["y"]) for v in edge["vertices"]]
+            dx, dz = b[0]-a[0], b[1]-a[1]
+            length = math.hypot(dx, dz)
+        except (KeyError, TypeError, ValueError):
+            continue
+        if not math.isfinite(length) or length < .35:
+            continue
+        for start, end in zip(outline_points, outline_points[1:] + outline_points[:1]):
+            if math.dist(a, start) < .05 and math.dist(b, end) < .05:
+                sign = 1
+                break
+            if math.dist(b, start) < .05 and math.dist(a, end) < .05:
+                sign = -1
+                break
+        else:
+            continue
+        normal = [sign * math.copysign(1, winding)*dz/length, 0,
+                  -sign * math.copysign(1, winding)*dx/length]
+        for opening in edge.get("openings") or []:
+            try:
+                width, height, base, center = (opening[key] for key in
+                                              ("width", "height", "lowerElevation", "relativeCenter"))
+                sill = base-floor_height
+                low, high = center-width/(2*length), center+width/(2*length)
+                if (opening["type"] != "opening" or not .35 <= width <= length or not .35 <= height <= 12
+                        or not .25 <= sill <= 12 or not 0 <= low < high <= 1):
+                    continue
+                corners = [[a[0]+dx*t, y, a[1]+dz*t] for t,y in
+                           ((low,sill),(high,sill),(high,sill+height),(low,sill+height))]
+                candidates.append({"corners": corners, "outward": normal,
+                                   "source": "Matterport opening " + str(opening["id"])})
+            except (KeyError, TypeError, ValueError, OverflowError):
+                continue
+    return candidates[:32]
+
+
 def outline(room, floor):
     vertices = {v["id"]: (v["position"]["x"], v["position"]["y"])
                 for v in floor["vertices"] if v.get("position")}
@@ -61,7 +113,7 @@ def stage(points):
     raise ValueError("Could not place the starter shot inside the returned outline.")
 
 
-def read_model(model_id, *, interactive=True):
+def read_model(model_id, *, interactive=True, query=QUERY):
     key = os.getenv("MATTERPORT_API_KEY")
     token = os.getenv("MATTERPORT_API_TOKEN")
     if interactive:
@@ -71,7 +123,7 @@ def read_model(model_id, *, interactive=True):
         raise ValueError("Matterport API credentials are unavailable.")
     auth = base64.b64encode(f"{key.strip()}:{token.strip()}".encode()).decode()
     request = Request("https://api.matterport.com/api/models/graph",
-                      json.dumps({"query": QUERY, "variables": {"id": model_id}}).encode(),
+                      json.dumps({"query": query, "variables": {"id": model_id}}).encode(),
                       {"Authorization": f"Basic {auth}", "Content-Type": "application/json"})
     with urlopen(request, timeout=45) as response:
         return json.load(response)

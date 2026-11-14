@@ -26,8 +26,10 @@ to open the legacy checkout. The server reads rooms/MODEL_ID/ROOM_ID.json,
 rooms/MODEL_ID.json, and the legacy room.json. Search, select a linked scan, and choose Inspect room.
 The viewer draws the imported metric outline and reports its bounding spans.
 
-Room inspection loads assets on demand. The app can import additional scans with
-Matterport credentials configured.
+**Shortlist scan** saves the selected scan and opens it in the editor immediately.
+With Matterport credentials on the server, it imports missing room outlines,
+opens the first available room, and loads its cached or freshly downloaded
+MatterPak. Use the room selector if the scan has several rooms.
 
 ## MatterPak workspace
 
@@ -144,16 +146,29 @@ checking model alignment. Greenway uses a checked preset. Missing geometry
 or alignment is reported as unknown. The cross-room search bounds expensive
 mesh checks to eight candidates per room.
 
-With MATTERPORT_API_KEY and MATTERPORT_API_TOKEN configured in the server
-environment, a scan without a local room offers **Import room geometry**.
-This fetches geometry for the selected model and opens the imported room.
-The separate MatterPak importer retrieves textures when needed.
+On macOS, save the Matterport credentials as password items named
+`scout-matterport-key` and `scout-matterport-token` in your login Keychain.
+Set the account on both items to your macOS username. The app reads them
+automatically at startup. You may be prompted for Keychain access on first use.
+For other setups or to override Keychain, set `MATTERPORT_API_KEY` and
+`MATTERPORT_API_TOKEN` in the server environment. Opening a linked scan fetches missing room outlines and then
+downloads its MatterPak on demand. The server caches the validated archive
+contents by model ID, so reopening the scan or switching rooms reuses the same
+assets. The editor shows the scaled outline while the bundle downloads and
+keeps the current shot when it switches to the captured mesh.
 
-When the selected room has an outline and the server has Matterport
-credentials, **Import MatterPak** can fetch its available bundle from the
-room workspace. The editor keeps the current camera settings during import
-and loads the captured mesh when it becomes available. Imported scans still
-need alignment review before using them for captured sightline checks.
+The server needs access to an existing MatterPak ZIP for that scan. If
+Matterport does not expose one, the editor keeps the outline and offers ZIP
+upload. The editor still needs an alignment review for a new mesh before
+using it for captured sightline checks.
+
+In the scout, enable **Allow the agent to fetch room outlines and MatterPaks**
+and the option to apply its recommendation. The agent can import outlines
+for promising CoStar leads, evaluate shot setups, and prepare the captured
+scene for its recommendation. If the preferred capture fails, it tries the
+next qualifying scan. Each investigation can request up to two uncached
+MatterPaks. Properties with no linked scan or no accessible bundle remain
+leads for follow-up.
 
 For an imported MatterPak, **Inspect mesh alignment** overlays the metric
 outline on an overhead mesh view. Adjust floor elevation and save the
@@ -179,3 +194,35 @@ and `outline` containing boundary-ordered `[x, z]` pairs in the scan's axes.
 Optional `label` and `height` are supported. Use points measured from the
 actual room or a scaled plan. Place actor marks in the editor and review the
 alignment against the MatterPak before running scan sightline checks.
+
+## Direct sunlight study
+
+Open an aligned MatterPak room and expand **Direct sunlight**. Enter verified
+site coordinates, the IANA time zone and the true bearing of the room's +z
+axis. Pick four perimeter corners per window on the scan or enter measured
+corners in the window fields. Review the outward normal before saving. The
+date and time controls display a separate direct-sun overlay over photographed
+textures and report exposure at each actor's eye-height mark. The result
+assumes unobstructed exterior sun where no usable elevation data is available.
+
+An optional normalized Vexcel DSM can be placed alongside the daylight profile
+as `legacy-daylight-dsm.json` or `room-ROOM_ID-daylight-dsm.json`. Use
+`crs: "EPSG:4326"`, `units: "meters"`, a verified `datum`, `bounds` in
+west/south/east/north order, and north-to-south rows of pixel elevations in
+`heights`. Use null for missing cells. Each window needs a verified
+`exterior` center with longitude, latitude, elevationMeters, and matching
+datum. The estimate checks a center ray from 2 to 150 m outside the window.
+An obstruction beyond that distance is outside the study coverage.
+
+Run daylight backend tests with
+`python3 -m unittest discover -s tests -p test_daylight.py` and geometry checks
+with `node tests/check-daylight-geometry.mjs THREE_PACKAGE_DIR`.
+
+The server fills site latitude, longitude, and the known Houston or Los Angeles
+time zone from the linked CoStar property. For a portable database without
+coordinates, point the app at the extracted kit or run
+`python3 catalog.py index-coordinates KIT_PATH` (add `--password-prompt` for
+an encrypted kit). Use `python3 catalog.py scan-location MODEL_ID` to retrieve
+the same property ID and coordinates for the Vexcel coverage tooling. Site
+coordinates can seed a Vexcel query. The window's measured position, elevation,
+and true-north alignment remain independent of the property's geocode.
