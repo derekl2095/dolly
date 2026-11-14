@@ -90,7 +90,9 @@ select {max-width:100%} canvas {width:100%;display:block;margin-top:12px;backgro
 <label><input name="lock-room" type="checkbox"> Lock current room</label>
 <label><input name="apply" type="checkbox" checked> Open checked proposal</label>
 <p>Catalog searches use the city and property type selected above.</p>
-<button>Investigate</button>
+<button type="button" id="review-brief">Review constraints</button>
+<section id="brief-review" hidden aria-label="Reviewed shot constraints"><ul></ul></section>
+<button type="submit" id="investigate-shot" disabled>Investigate</button>
 </form>
 <p id="agent-result" role="status"></p>
 <section id="agent-evidence" aria-label="Scouting evidence"></section>
