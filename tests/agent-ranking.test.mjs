@@ -286,7 +286,8 @@ test("missing mesh alignment cannot be bypassed by an agent retry", async () => 
     },
   });
   assert.equal(evidence.candidates.length, 2);
-  assert.ok(evidence.candidates.every(candidate => candidate.status === "failed" &&
+  assert.ok(evidence.candidates.every(candidate => candidate.status === "missing-evidence" &&
+    candidate.missingEvidence.includes("captured sightlines") &&
     /alignment unverified/i.test(candidate.outcome)));
   assert.equal(evidence.recommended, undefined);
   assert.deepEqual(alternatives, []);

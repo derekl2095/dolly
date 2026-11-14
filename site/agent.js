@@ -62,7 +62,7 @@ export async function runAgent(brief, {activity, apply, lockedLens = null, locke
   const importErrors = new Map();
   const availableTools = allowImport ? tools : tools.filter(tool => tool.function.name !== "import_capture_outline");
   function candidateReports() {
-    const rank = {qualifies: 0, fallback: 1, failed: 2};
+    const rank = {qualifies: 0, fallback: 1, "missing-evidence": 2, failed: 3};
     return [...candidates.values()].map(({room, setup, report}) => {
       const unmet = [];
       if (setup && lockedMove && (setup.travel === 0 ? "static" : report.move) !== lockedMove)
@@ -70,7 +70,8 @@ export async function runAgent(brief, {activity, apply, lockedLens = null, locke
       if (setup && setup.travel + 1e-8 < minimumTravel) unmet.push("Minimum travel");
       if (setup && requireSightlines && !report.sightlinesSampled) unmet.push("Captured sightlines");
       if (setup && lockedRoom && room) unmet.push("Current room lock");
-      const status = !setup ? "failed" : unmet.length ? "fallback" : "qualifies";
+      let status = report.solverStatus === "missing-evidence" ? "missing-evidence" : "failed";
+      if (setup) status = unmet.length ? "fallback" : "qualifies";
       return {...report, status, unmet,
         travelDifference: setup ? (targetTravel === null
           ? Math.max(0, report.requested - setup.travel) : Math.abs(targetTravel - setup.travel)) : null};

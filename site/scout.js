@@ -975,11 +975,11 @@ agentForm.addEventListener("submit", async event => {
           const list = element("ol", "");
           for (const candidate of candidates) {
             const {id, label, model, status, outcome, unmet, travel, requested,
-              clearanceMargin, framingMargin, sightlinesSampled} = candidate;
+              clearanceMargin, framingMargin, sightlinesSampled, missingEvidence} = candidate;
             const entry = element("li", "");
             entry.dataset.candidate = id;
             entry.append(element("strong", [label || model || id,
-              id === recommended ? "Top technical match" : status,
+              id === recommended ? "Top technical match" : status.replace("missing-evidence", "Missing evidence"),
               id === queued ? "Selected proposal" : ""].filter(Boolean).join(" · ")));
             entry.append(element("p", outcome));
             const measurements = [
@@ -989,6 +989,7 @@ agentForm.addEventListener("submit", async event => {
               Number.isFinite(travel) ? (sightlinesSampled ? "Sampled sightlines clear" : "Sightlines unverified") : "",
             ].filter(Boolean);
             if (measurements.length) entry.append(element("p", measurements.join(" · ")));
+            if (missingEvidence?.length) entry.append(element("p", "Still needed · " + missingEvidence.join(", ")));
             if (unmet.length) entry.append(element("p", "Unmet requirements · " + unmet.join(", ")));
             list.append(entry);
           }
