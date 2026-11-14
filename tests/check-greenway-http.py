@@ -10,6 +10,7 @@ from threading import Thread
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+import app as scout_app
 from app import ScoutServer
 
 
@@ -50,6 +51,7 @@ def main():
     if not database.is_file() or not (assets / "room.json").is_file():
         parser.error("Extract the Greenway preview bundle into DATA_DIR first.")
     os.environ.pop("SCOUT_MODEL_KEY", None)
+    scout_app.MESH_CACHE = args.data.resolve() / "mesh-cache"
     with (ThreadingHTTPServer(("127.0.0.1", 0), ScriptedProvider) as provider,
           ScoutServer(("127.0.0.1", 0), database, assets) as app):
         os.environ.update(SCOUT_MODEL_URL=f"http://127.0.0.1:{provider.server_port}",

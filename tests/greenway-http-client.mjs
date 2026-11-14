@@ -29,3 +29,14 @@ assert.equal(evidence.recommended, alternatives[0].id);
 assert.ok(evidence.candidates[0].framingMargin > 0);
 assert.equal(evidence.candidates[0].sightlinesSampled, false);
 console.log("Verified the provider relay, CoStar catalog, Greenway geometry and report-only shot handoff.");
+
+const captureBase = base + "/matterpak/" + room.modelId + "/";
+const manifestResponse = await fetch(captureBase + "manifest.json");
+assert.ok(manifestResponse.ok);
+const manifest = await manifestResponse.json();
+const mesh = await fetch(captureBase + manifest.obj.split("/").map(encodeURIComponent).join("/"));
+assert.ok(mesh.ok);
+const meshBytes = await mesh.arrayBuffer();
+assert.ok(meshBytes.byteLength > 0);
+assert.equal(room.matterpakAlignmentVerified, true);
+console.log("Verified the aligned Greenway OBJ is served from the supplied preview bundle.");
