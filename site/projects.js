@@ -1,3 +1,5 @@
+import {tracePath} from "./path.js?v=5";
+
 const storageKey = "scout-projects-v1";
 export const projectArchiveMaxBytes = 1_000_000;
 
@@ -43,6 +45,7 @@ export function parseProjectArchive(text) {
     const shot = selection.shot;
     return shot == null || (isObject(shot) && point(shot.mark) && point(shot.aim) &&
       (shot.axis == null || point(shot.axis)) &&
+      (shot.moveKind === "curve" ? Boolean(tracePath(shot.pathPoints)) : shot.pathPoints == null) &&
       Number.isFinite(shot.lens) && shot.lens >= 15 && shot.lens <= 150 &&
       Number.isFinite(shot.travel) && shot.travel >= 0 && shot.travel <= 4 &&
       Array.isArray(shot.actors) && shot.actors.length === 2 &&

@@ -54,24 +54,47 @@ select {max-width:100%} canvas {width:100%;display:block;margin-top:12px;backgro
 #transport input[type="range"] {width:90px;padding:0}
 @media(max-width:700px){.layout{grid-template-columns:1fr}}
 </style>
+<link rel="stylesheet" href="scout-studio.css?v=9">
 </head>
 <body><main>
-<h1>Location Scout</h1>
+<header class="studio-header">
+<a class="studio-brand" href="./">Scout<span>.</span></a>
+<nav aria-label="Workspace"><a href="#scouting">Locations</a><a href="#room-title">Shot editor</a></nav>
 <details id="projects">
 <summary>Projects</summary>
+<div class="project-controls">
+<section aria-labelledby="current-project-heading">
+<h2 id="current-project-heading">Current project</h2>
 <form id="project-form">
 <label>Project name <input name="title" required maxlength="100" placeholder="Interview location scout"></label>
 <button>Save project</button>
 <button id="new-project" type="button">New project</button>
 </form>
-<label>Saved projects <select id="project-list"><option value="">Choose a project</option></select></label>
+</section>
+<section aria-labelledby="saved-project-heading">
+<h2 id="saved-project-heading">Saved projects</h2>
+<select id="project-list" aria-label="Saved projects"><option value="">Choose a project</option></select>
+<div class="project-actions">
 <button id="open-project" type="button">Open project</button>
 <button id="export-project" type="button">Export project</button>
+</div>
+</section>
+<details class="project-files">
+<summary>Import files</summary>
 <label>Import project <input id="import-project" type="file" accept=".json,application/json"></label>
 <label>Open shot export <input id="import-shot" type="file" accept=".json,application/json"></label>
+</details>
 <p id="project-status" role="status"></p>
 <details hidden id="project-history"><summary>Agent revisions</summary><ol></ol></details>
+</div>
 </details>
+</header>
+<div id="workspace" class="layout">
+<section class="scouting" id="scouting" aria-labelledby="scouting-title">
+<div class="scouting-hero">
+<div class="scouting-intro">
+<h1 id="scouting-title">Location<br class="intro-break"> Scout<span>.</span></h1>
+</div>
 <form id="scout-search"><input name="q" aria-label="Search CoStar properties" maxlength="240" placeholder="Showroom with storefront glass">
 <label>City <select name="city"><option value="">Any city</option><option>Houston</option><option>Los Angeles</option></select></label>
 <label>Property type <select name="category"><option value="">Any type</option><option value="office">Office</option><option value="industrial warehouse">Industrial</option><option value="retail">Retail</option><option value="flex">Flex</option><option value="hotel hospitality">Hotel</option><option value="apartment multifamily">Apartment</option><option value="land">Land</option></select></label>
@@ -79,6 +102,8 @@ select {max-width:100%} canvas {width:100%;display:block;margin-top:12px;backgro
 <label><input name="imported" type="checkbox" value="1"> Imported room outlines only</label>
 <button>Search CoStar</button></form>
 <p id="status" role="status"></p>
+</div>
+<details id="shortlist" hidden><summary>Shortlisted scans</summary><ul></ul></details>
 <details id="agent-panel">
 <summary>Scout with a shot brief</summary>
 <form id="agent-form">
@@ -120,12 +145,78 @@ select {max-width:100%} canvas {width:100%;display:block;margin-top:12px;backgro
 <p id="compare-status" role="status"></p>
 <div id="compare-results"></div>
 </details>
-<div id="workspace" class="layout">
-
-<details id="shortlist" hidden><summary>Shortlisted scans</summary><ul></ul></details>
+<div class="discovery">
+<section id="location-map-panel" aria-labelledby="location-map-heading" hidden>
+<header>
+<div><h2 id="location-map-heading">Location map</h2><p id="location-map-status" role="status"></p></div>
+<label>Zoom to city <select id="location-map-city"><option value="">All cities</option><option>Houston</option><option>Los Angeles</option></select></label>
+</header>
+<div id="location-map" aria-label="Map of search results"></div>
+</section>
+<div class="result-list">
 <section id="results" aria-label="Property matches"></section>
 <button id="more-locations" type="button" hidden>Load more properties</button>
-<aside><h2 id="room-title">Room plan</h2><p id="room-status" role="status">Select a linked scan to inspect its imported geometry.</p><details id="measured-room" hidden>
+</div>
+</div>
+</section>
+<aside aria-labelledby="room-title" hidden>
+<div class="room-header">
+<div><h2 id="room-title" tabindex="-1">Room plan</h2><p id="room-status" role="status">Select a linked scan to inspect its imported geometry.</p></div>
+<button id="back-to-results" type="button">Back to results</button>
+<label id="room-picker" hidden>Room <select aria-label="Imported room"></select></label></div>
+<div id="shot-grid"><div class="preview-column"><div id="viewport" hidden>
+<div id="camera-hud" aria-hidden="true"><span id="shot-time">00:00.0</span><span id="shot-lens">35 mm</span></div>
+</div>
+<div id="transport" hidden>
+<div class="playback">
+<button id="play" type="button">Play shot</button>
+<label>Position <input id="timeline" type="range" min="0" max="1000" value="500"></label>
+<button id="export-shot" type="button">Save shot</button>
+</div>
+<details class="camera-controls" open>
+<summary>Camera settings</summary>
+<div class="camera-fields">
+<label>Move <select id="move-kind"><option value="slide">Lateral slide</option><option value="push">Push-in</option><option value="pull">Pull-back</option><option value="static">Static</option><option value="custom" hidden>Custom path</option><option value="curve" hidden>Drawn curve</option></select></label>
+<label>Lens <input id="lens" type="range" min="15" max="150" value="35"><output id="focal">35 mm</output></label>
+<label>Travel <input id="travel" type="range" min="0" max="4" step="any" value=".7"><output id="distance">0.70 m</output></label>
+<label>Duration (seconds) <input id="shot-duration" type="range" min=".5" max="30" step=".1"><output id="duration-value"></output></label>
+<label>Sensor width <input id="sensor-width" type="range" min="8" max="65" step=".01"><output id="sensor-value"></output></label>
+<label>Camera height <input id="camera-height" type="range" min=".15" max="4" step=".01"><output id="height-value"></output></label>
+<label>Rig radius <input id="rig-radius" type="range" min=".05" max="1.5" step=".01"><output id="rig-value"></output></label>
+</div>
+<div class="camera-options">
+<label><input type="checkbox" id="keep-mark" checked> Keep camera mark</label>
+<label><input type="checkbox" id="check-scan"> Require sampled mesh sightlines</label>
+<label><input type="checkbox" id="show-marks"> Show actor stand-ins</label>
+<button id="fit" type="button">Fit slide to room</button>
+</div>
+</details>
+</div>
+<p id="render-status" role="status"></p>
+</div>
+<div class="blocking">
+<canvas id="plan" width="720" height="500" hidden aria-label="Scaled room outline. Drag actor marks or click to place the selected mark"></canvas>
+<p id="rig-width" hidden></p>
+<div id="plan-tools" hidden>
+<button id="draw-curve" type="button" aria-pressed="false">Draw curve</button>
+<label>Place <select id="place-mark"><option value="camera">Camera center</option><option value="start">Camera start</option><option value="end">Camera end</option><option value="aim">Camera aim</option><option value="0">Actor 1</option><option value="1">Actor 2</option></select></label>
+<button id="center-aim" type="button">Aim at actors</button>
+<button id="mark-obstacle" type="button" aria-pressed="false">Mark furniture</button>
+<button id="undo-obstacle" type="button" disabled>Undo last mark</button>
+<p id="plan-instructions">Drag A1 or A2 to move an actor. Click empty space to place the selected mark.</p>
+</div>
+</div></div>
+<div class="shot-evidence"><p id="clearance" role="status"></p><p id="ceiling" role="status"></p><p id="framing" role="status"></p><p id="sightline" role="status"></p>
+<div id="sightline-actions" hidden>
+<button id="view-obstruction" type="button">Jump to blocked view</button>
+<button id="fit-sightlines" type="button">Find a clear move</button>
+</div></div>
+<form id="direction" hidden>
+<input aria-label="Camera direction" placeholder="Try a 1.5 m slide" maxlength="160" required>
+<button>Replan shot</button>
+</form><p id="revision" role="status"></p>
+<details class="capture-tools"><summary>Room data and alignment</summary>
+<details id="measured-room" hidden>
 <summary>Import measured room outline</summary>
 <form>
 <label>Room ID <input name="room" required maxlength="128" pattern="[A-Za-z0-9_\-]+" placeholder="showroom"></label>
@@ -134,9 +225,7 @@ select {max-width:100%} canvas {width:100%;display:block;margin-top:12px;backgro
 <p>Use a measured plan in meters and include its source. Review alignment before running mesh sightline checks.</p>
 <p role="status"></p>
 </form>
-</details><label id="room-picker" hidden>Room <select aria-label="Imported room"></select></label><div id="shot-grid"><div id="viewport" hidden>
-<div id="camera-hud" aria-hidden="true"><span id="shot-time">00:00.0</span><span id="shot-lens">35 mm</span></div>
-</div><canvas id="plan" width="720" height="500" hidden aria-label="Scaled room outline. Drag actor marks or click to place the selected mark"></canvas></div><p id="render-status" role="status"></p>
+</details>
 <form id="alignment" hidden>
 <button type="button" id="alignment-view" aria-pressed="false">Inspect mesh alignment</button>
 <label>Floor elevation (m) <input name="height" type="number" step="any" min="-200" max="200" required></label>
@@ -166,41 +255,11 @@ select {max-width:100%} canvas {width:100%;display:block;margin-top:12px;backgro
 <p role="status"></p>
 </form>
 </details>
-<div id="transport" hidden>
-<button id="play" type="button">Play shot</button>
-<label>Move <select id="move-kind"><option value="slide">Lateral slide</option><option value="push">Push-in</option><option value="pull">Pull-back</option><option value="static">Static</option><option value="custom" hidden>Custom path</option></select></label>
-<button id="export-shot" type="button">Save shot</button>
-<button id="fit" type="button">Fit slide to room</button>
-<label><input type="checkbox" id="keep-mark" checked> Keep camera mark</label>
-<label><input type="checkbox" id="check-scan"> Require sampled mesh sightlines</label>
-<label><input type="checkbox" id="show-marks"> Show actor stand-ins</label>
-<label>Duration (seconds) <input id="shot-duration" type="range" min=".5" max="30" step=".1"><output id="duration-value"></output></label>
-<label>Position <input id="timeline" type="range" min="0" max="1000" value="500"></label>
-<label>Sensor width <input id="sensor-width" type="range" min="8" max="65" step=".01"><output id="sensor-value"></output></label>
-<label>Camera height <input id="camera-height" type="range" min=".15" max="4" step=".01"><output id="height-value"></output></label>
-<label>Rig radius <input id="rig-radius" type="range" min=".05" max="1.5" step=".01"><output id="rig-value"></output></label>
-<label>Lens <input id="lens" type="range" min="15" max="150" value="35"><output id="focal">35 mm</output></label>
-<label>Travel <input id="travel" type="range" min="0" max="4" step="any" value=".7"><output id="distance">0.70 m</output></label>
-</div><p id="clearance" role="status"></p><p id="ceiling" role="status"></p><p id="framing" role="status"></p><p id="sightline" role="status"></p>
-<div id="sightline-actions" hidden>
-<button id="view-obstruction" type="button">Jump to blocked view</button>
-<button id="fit-sightlines" type="button">Find a clear move</button>
-</div>
-<div id="plan-tools" hidden>
-<label>Place <select id="place-mark"><option value="camera">Camera center</option><option value="start">Camera start</option><option value="end">Camera end</option><option value="aim">Camera aim</option><option value="0">Actor 1</option><option value="1">Actor 2</option></select></label>
-<button id="center-aim" type="button">Aim at actors</button>
-<button id="mark-obstacle" type="button" aria-pressed="false">Mark furniture</button>
-<button id="undo-obstacle" type="button" disabled>Undo last mark</button>
-<p id="plan-instructions">Drag A1 or A2 to move an actor. Click empty space to place the selected mark.</p>
-</div><form id="direction" hidden>
-<input aria-label="Camera direction" placeholder="Try a 1.5 m slide" maxlength="160" required>
-<button>Replan shot</button>
-</form><p id="revision" role="status"></p>
-<details id="capture" hidden open>
+<details id="capture" hidden>
 <summary>Captured floor plan</summary>
 <img alt="Photographic floor plan captured by Matterport">
-</details></aside>
+</details></details></aside>
 </div>
 </main>
 <script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js","three-mesh-bvh":"https://cdn.jsdelivr.net/npm/three-mesh-bvh@0.8.3/build/index.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"}}</script>
-<script type="module" src="scout.js?v=sun-preview"></script></body></html>
+<script type="module" src="scout.js?v=merged-scout"></script></body></html>

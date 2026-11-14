@@ -1,7 +1,7 @@
 import {mountDaylight} from "./daylight.js?v=sun-preview";
-import {alignMesh, sightlineCheck} from "./sightlines.js";
+import {alignMesh, sightlineCheck} from "./sightlines.js?v=5";
 import {actorMarks, checkCameraHeight, loadShot, roomKey, shotSettings} from "./room-state.js";
-import {cameraMoveAxis, checkFraming, checkRigClearance, easedPathFraction, editorShotState, findSlide, interpretDirection, pathFromEndpoints, timeFractionAtPath} from "./path.js";
+import {cameraMoveAxis, checkFraming, checkRigClearance, easedPathFraction, editorShotState, findSlide, interpretDirection, pathFromEndpoints, timeFractionAtPath, tracePath} from "./path.js?v=5";
 
 const viewport = document.querySelector("#viewport");
 const status = document.querySelector("#render-status");
@@ -192,6 +192,8 @@ function mount(THREE, room, mesh, textures, release, captured = false) {
   alignMesh(mesh, room);
 
   const saved = {...loadShot(room), ...room.proposedShot};
+  let curve = saved.moveKind === "curve"
+    ? tracePath(room.proposedShot ? room.proposedShot.pathPoints : saved.pathPoints) : null;
   const actors = actorMarks(room, saved);
   const marks = new THREE.Group();
   for (const [index, point] of actors.entries()) {
@@ -224,6 +226,7 @@ function mount(THREE, room, mesh, textures, release, captured = false) {
   if (Array.isArray(saved?.mark) && saved.mark.length === 2 && saved.mark.every(Number.isFinite)) {
     [cx, cz] = saved.mark;
   }
+  if (curve) [cx, cz] = curve.at(.5);
   const initialSettings = shotSettings(room, saved);
   let aimHeight = initialSettings.aimHeight;
   duration.value = initialSettings.durationSeconds;
@@ -234,14 +237,16 @@ function mount(THREE, room, mesh, textures, release, captured = false) {
   travel.value = Number.isFinite(saved?.travel) ? saved.travel : .7;
   keepMark.checked = saved?.keepMark !== false;
   checkScan.checked = saved?.requireSightlines === true;
-  moveKind.value = ["slide", "push", "pull", "static", "custom"].includes(saved?.moveKind) ? saved.moveKind : "slide";
+  moveKind.value = curve ? "curve"
+    : ["slide", "push", "pull", "static", "custom"].includes(saved?.moveKind) ? saved.moveKind : "slide";
+  if (curve) travel.value = curve.travel;
   if (moveKind.value === "static") travel.value = "0";
-  travel.disabled = moveKind.value === "static";
+  travel.disabled = Boolean(curve) || moveKind.value === "static";
 
   function save() {
     try {
       localStorage.setItem(key, JSON.stringify({
-        mark: [cx, cz], ...settings(), aimHeight, lens: Number(lens.value), travel: Number(travel.value), keepMark: keepMark.checked, moveKind: moveKind.value, axis: fixedMoveAxis, requireSightlines: checkScan.checked, actors, aimLocked, aim: [tx, tz],
+        mark: [cx, cz], ...settings(), aimHeight, lens: Number(lens.value), travel: curve?.travel ?? Number(travel.value), keepMark: keepMark.checked, moveKind: moveKind.value, axis: fixedMoveAxis, pathPoints: curve?.points, requireSightlines: checkScan.checked, actors, aimLocked, aim: [tx, tz],
       }));
     } catch {}
   }
@@ -283,13 +288,13 @@ function mount(THREE, room, mesh, textures, release, captured = false) {
   let blockedView;
   let rayHeight;
   let raycast;
-  function meshObstruction(from, to, cameraHeight = settings().cameraHeight) {
+  function meshObstruction(from, to, cameraHeight = settings().cameraHeight, activeCurve) {
     if (!captured) return null;
     if (rayHeight !== cameraHeight) {
       raycast = sightlineCheck(THREE, mesh, actors, cameraHeight);
       rayHeight = cameraHeight;
     }
-    return raycast(from, to);
+    return raycast(from, to, activeCurve?.at);
   }
   let obstacles = [];
   const plan = document.querySelector("#plan");
@@ -307,6 +312,7 @@ function mount(THREE, room, mesh, textures, release, captured = false) {
   }
 
   function endpoints(distance) {
+    if (curve) return [curve.points[0], curve.points.at(-1)];
     const pose = editorShotState({
       mark: [cx, cz], axis: fixedMoveAxis, travel: distance, moveKind: moveKind.value,
       aim: [tx, tz], actors, lens: Number(lens.value), slideAxis: room.slideAxis,
@@ -314,12 +320,31 @@ function mount(THREE, room, mesh, textures, release, captured = false) {
     return [pose.start, pose.end];
   }
 
-  function framing(from, to, focal = Number(lens.value), cameraHeight = settings().cameraHeight) {
+  function framing(from, to, focal = Number(lens.value), cameraHeight = settings().cameraHeight, activeCurve) {
     if (!actors.every(Boolean)) return null;
-    return checkFraming(from, to, [tx, tz], actors, {
+    const frameSettings = {
       focal, width: settings().sensorWidthMm, aspect: camera.aspect,
       cameraHeight, aimHeight,
-    });
+    };
+    if (!activeCurve) return checkFraming(from, to, [tx, tz], actors, frameSettings);
+    let worst = {margin: Infinity, limitingProgress: 0};
+    for (const segment of activeCurve.segments) {
+      const check = checkFraming(segment.from, segment.to, [tx, tz], actors, frameSettings);
+      if (check.margin < worst.margin) worst = {margin: check.margin,
+        limitingProgress: (segment.start + check.limitingProgress * segment.length) / activeCurve.travel};
+    }
+    return worst;
+  }
+
+  function clearance(from, to) {
+    const check = (a, b) => checkRigClearance(room.outline, obstacles, a, b, settings().rigRadius);
+    if (!curve) return check(from, to);
+    let worst = {margin: Infinity};
+    for (const segment of curve.segments) {
+      const result = check(segment.from, segment.to);
+      if (result.margin < worst.margin) worst = result;
+    }
+    return worst;
   }
 
   function inspectSightlines(from, to) {
@@ -332,7 +357,7 @@ function mount(THREE, room, mesh, textures, release, captured = false) {
     }
     sightline.textContent = "Sampling sightlines against the captured mesh…";
     sightlineTimer = setTimeout(() => {
-      const hit = meshObstruction(from, to);
+      const hit = meshObstruction(from, to, settings().cameraHeight, curve);
       blockedView = hit;
       sightlineActions.hidden = !hit;
       sightline.textContent = hit
@@ -346,12 +371,12 @@ function mount(THREE, room, mesh, textures, release, captured = false) {
     const [from, to] = endpoints(distance);
     const t = Number(timeline.value) / 1000;
     const eased = easedPathFraction(t);
-    const [x, z] = from.map((value, index) => value + (to[index] - value) * eased);
+    const [x, z] = curve ? curve.at(eased) : from.map((value, index) => value + (to[index] - value) * eased);
     const focal = Number(lens.value);
     if (checkedTravel !== distance || checkedLens !== focal) {
       checkedTravel = distance;
       checkedLens = focal;
-      const {margin, feature} = checkRigClearance(room.outline, obstacles, from, to, settings().rigRadius);
+      const {margin, feature} = clearance(from, to);
       const scope = obstacles.length ? "Unmarked furniture unchecked." : "Furniture unchecked.";
       document.querySelector("#clearance").textContent = margin >= 0
         ? "At least " + Math.floor(margin * 100) + " cm beyond the rig radius at " + feature +
@@ -363,13 +388,15 @@ function mount(THREE, room, mesh, textures, release, captured = false) {
         : ceiling.status === "fail" ? "Camera height reaches or exceeds the reported room height."
         : Math.floor(ceiling.margin * 100) + " cm from the camera center to the reported room height.";
       inspectSightlines(from, to);
-      const frameCheck = framing(from, to);
+      const frameCheck = framing(from, to, focal, settings().cameraHeight, curve);
       document.querySelector("#framing").textContent = !frameCheck ? "Place both actor marks to check two-shot framing."
         : frameCheck.margin >= 0 ? "Stand-in bounds fit at all sampled positions."
         : "Stand-in bounds clip near " + Math.round(frameCheck.limitingProgress * 100) + "% of the move.";
       document.querySelector("#clearance").dataset.result = margin >= 0 ? "pass" : "fail";
     }
-    viewport.dispatchEvent(new CustomEvent("shotpose", {detail: {from, to, x, z, tx, tz, actors}}));
+    viewport.dispatchEvent(new CustomEvent("shotpose", {
+      detail: {from, to, x, z, tx, tz, actors, rigRadius: settings().rigRadius, pathPoints: curve?.points},
+    }));
     camera.fov = THREE.MathUtils.radToDeg(2 * Math.atan((settings().sensorWidthMm / camera.aspect) / (2 * focal)));
     camera.updateProjectionMatrix();
     camera.position.set(x, settings().cameraHeight, z);
@@ -453,12 +480,15 @@ function mount(THREE, room, mesh, textures, release, captured = false) {
   }, options);
   button.addEventListener("click", () => {
     if (frame) return stop();
+    play();
+  }, options);
+  function play() {
     const initial = Number(timeline.value);
     start = performance.now() - (playFromStart || initial >= 1000 ? 0 : initial * Number(duration.value));
     playFromStart = false;
     button.textContent = "Pause";
     frame = requestAnimationFrame(tick);
-  }, options);
+  }
   plan.addEventListener("obstacleschange", event => {
     obstacles = event.detail;
     checkedTravel = undefined;
@@ -466,7 +496,33 @@ function mount(THREE, room, mesh, textures, release, captured = false) {
     render();
   }, options);
   plan.dispatchEvent(new Event("shotmounted"));
+  function applyCurve(path) {
+    applySetup({pathPoints: path.points, mark: path.at(.5), travel: path.travel,
+      moveKind: "curve", lens: Number(lens.value)});
+  }
+  plan.addEventListener("drawcamera", event => {
+    const path = tracePath(event.detail);
+    if (!path) {
+      revision.textContent = "Draw a camera path between 1 cm and 4 m. The previous shot was kept.";
+      return;
+    }
+    if (reviewing) {
+      reviewing = false;
+      alignmentView.setAttribute("aria-pressed", "false");
+      alignmentStatus.textContent = "";
+    }
+    timeline.value = "0";
+    applyCurve(path);
+    revision.textContent = "Playing the drawn curve. Review clearance and framing below.";
+    play();
+  }, options);
   plan.addEventListener("choosecamera", event => {
+    if (curve) {
+      const offset = [event.detail[0] - cx, event.detail[1] - cz];
+      const path = tracePath(curve.points.map(point => point.map((value, axis) => value + offset[axis])));
+      if (path) applyCurve(path);
+      return;
+    }
     stop();
     [cx, cz] = event.detail;
     if (moveKind.value !== "custom") fixedMoveAxis = undefined;
@@ -506,6 +562,19 @@ function mount(THREE, room, mesh, textures, release, captured = false) {
   }, options);
   plan.addEventListener("chooseendpoint", event => {
     const {which, point} = event.detail;
+    if (curve) {
+      const points = curve.points.slice();
+      points[which === "start" ? 0 : points.length - 1] = point;
+      const path = tracePath(points);
+      if (!path) {
+        revision.textContent = "The updated curve must be between 1 cm and 4 m.";
+        return;
+      }
+      timeline.value = which === "start" ? "0" : "1000";
+      applyCurve(path);
+      revision.textContent = "Curve " + which + " updated.";
+      return;
+    }
     const [from, to] = endpoints(Number(travel.value));
     const path = pathFromEndpoints(which === "start" ? point : from, which === "end" ? point : to);
     if (path.travel > Number(travel.max) || !Number.isFinite(path.travel)) {
@@ -549,6 +618,7 @@ function mount(THREE, room, mesh, textures, release, captured = false) {
       : actors.every(Boolean) ? "Both actor marks are set." : "Actor mark set. Place the other actor to check the two-shot.";
   }, options);
   function planShot({distance, focal = Number(lens.value), cameraHeight = settings().cameraHeight, objective = "travel", requireSightlines = false}) {
+    if (curve) return {reason: "Redraw the curve to change its route, or select a straight move for automatic planning."};
     if (!actors.every(Boolean)) return {reason: "Place both actor marks before planning a two-shot."};
     const ceiling = checkCameraHeight(room, cameraHeight);
     if (ceiling.status === "fail")
@@ -598,6 +668,7 @@ function mount(THREE, room, mesh, textures, release, captured = false) {
 
   function applySetup(setup) {
     stop();
+    curve = setup.moveKind === "curve" ? tracePath(setup.pathPoints) : null;
     const pose = editorShotState({
       ...setup, aim: setup.aim || [tx, tz], actors: setup.actors || actors,
       moveKind: setup.moveKind || moveKind.value, slideAxis: room.slideAxis,
@@ -606,7 +677,7 @@ function mount(THREE, room, mesh, textures, release, captured = false) {
     fixedMoveAxis = Array.isArray(setup.axis) ? setup.axis.slice() : setup.axis;
     if (setup.moveKind) {
       moveKind.value = setup.moveKind;
-      travel.disabled = setup.moveKind === "static";
+      travel.disabled = Boolean(curve) || setup.moveKind === "static";
     }
     if (Array.isArray(setup.aim)) {
       [tx, tz] = setup.aim;
@@ -631,7 +702,7 @@ function mount(THREE, room, mesh, textures, release, captured = false) {
     if (Number.isFinite(setup.durationSeconds)) duration.value = setup.durationSeconds;
     if (typeof setup.requireSightlines === "boolean") checkScan.checked = setup.requireSightlines;
     if (typeof setup.keepMark === "boolean") keepMark.checked = setup.keepMark;
-    travel.value = String(pose.travel);
+    travel.value = String(curve?.travel ?? pose.travel);
     save();
     render();
   }
@@ -668,15 +739,15 @@ function mount(THREE, room, mesh, textures, release, captured = false) {
   exportShot.addEventListener("click", () => {
     const distance = Number(travel.value);
     const [start, end] = endpoints(distance);
-    const {margin, feature} = checkRigClearance(room.outline, obstacles, start, end, settings().rigRadius);
+    const {margin, feature} = clearance(start, end);
     const sampledMesh = aligned && actors.every(Boolean);
-    const obstruction = sampledMesh ? meshObstruction(start, end) : null;
+    const obstruction = sampledMesh ? meshObstruction(start, end, settings().cameraHeight, curve) : null;
     const durationSeconds = Number(duration.value);
     const secondsAt = fraction => timeFractionAtPath(fraction) * durationSeconds;
     const shot = {
       schemaVersion: 1, interpolation: "smoothstep", aimLocked,
       keepMark: keepMark.checked, requireSightlines: checkScan.checked,
-      modelId: room.modelId, roomId: room.roomId || null, units: "meters", actors, start, end, aim: [tx, tz],
+      modelId: room.modelId, roomId: room.roomId || null, units: "meters", actors, start, end, pathPoints: curve?.points, aim: [tx, tz],
       cameraHeight: settings().cameraHeight, aimHeight,
       sensorWidthMm: settings().sensorWidthMm, focalLengthMm: Number(lens.value), aspect: [16, 9],
       durationSeconds, moveKind: moveKind.value, rigRadius: settings().rigRadius, clearanceCheck: margin >= 0 ? "pass" : "fail",
@@ -688,7 +759,7 @@ function mount(THREE, room, mesh, textures, release, captured = false) {
             timeSeconds: secondsAt(obstruction.t)} : null}
         : {status: "unknown"},
       framing: (() => {
-        const check = framing(start, end);
+        const check = framing(start, end, Number(lens.value), settings().cameraHeight, curve);
         if (!check) return {status: "unknown"};
         return {status: check.margin >= 0 ? "pass" : "fail",
           normalizedMargin: Number.isFinite(check.margin) ? check.margin : null,
@@ -705,7 +776,10 @@ function mount(THREE, room, mesh, textures, release, captured = false) {
   }, options);
   showMarks.addEventListener("change", render, options);
   moveKind.addEventListener("change", () => {
+    if (moveKind.value === "curve" && curve) return;
     stop();
+    curve = null;
+    if (moveKind.value === "curve") moveKind.value = "custom";
     fixedMoveAxis = undefined;
     checkedTravel = undefined;
     travel.disabled = moveKind.value === "static";
@@ -736,8 +810,8 @@ function mount(THREE, room, mesh, textures, release, captured = false) {
   if (room.proposedShot) save();
 
   return {plan: planShot, apply: applySetup, snapshot() {
-    return {mark: [cx, cz], ...settings(), aimHeight, lens: Number(lens.value), travel: Number(travel.value),
-      moveKind: moveKind.value, axis: fixedMoveAxis, keepMark: keepMark.checked, requireSightlines: checkScan.checked, obstacles, actors: actors.map(point => point?.slice() ?? null), aimLocked, aim: [tx, tz]};
+    return {mark: [cx, cz], ...settings(), aimHeight, lens: Number(lens.value), travel: curve?.travel ?? Number(travel.value),
+      moveKind: moveKind.value, axis: fixedMoveAxis, pathPoints: curve?.points, keepMark: keepMark.checked, requireSightlines: checkScan.checked, obstacles, actors: actors.map(point => point?.slice() ?? null), aimLocked, aim: [tx, tz]};
   }, dispose() {
     stop();
     controls.abort();

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import {existsSync, readFileSync} from "node:fs";
 import test from "node:test";
-import {editorShotState, slideEndpoints} from "./path.js";
+import {editorShotState, readShotExport, roundStroke, slideEndpoints, tracePath} from "./path.js";
 import {solveShot} from "./solver.js";
 import {compareRooms} from "./compare.js";
 
@@ -9,6 +9,24 @@ const shot = {
   lens: 35, sensorWidthMm: 36, cameraHeight: 1.42, rigRadius: .25,
   move: "slide", targetTravel: .7, minimumTravel: .4,
 };
+
+test("a drawn curve plays by distance and survives a shot export", () => {
+  const pathPoints = roundStroke([[0, 0], [0, 1], [2, 1]]);
+  const curve = tracePath(pathPoints);
+  assert.deepEqual(curve.at(0), [0, 0]);
+  assert.deepEqual(curve.at(1), [2, 1]);
+  assert.ok(curve.at(.5)[1] > .9);
+  const payload = {schemaVersion: 1, units: "meters", interpolation: "smoothstep",
+    modelId: "fixture", moveKind: "curve", start: curve.at(0), end: curve.at(1),
+    pathPoints, aim: [1, 2], actors: [null, null], focalLengthMm: 35,
+    cameraHeight: 1.42, sensorWidthMm: 36, rigRadius: .25, durationSeconds: 3.8,
+    aspect: [16, 9], obstacles: []};
+  const {setup} = readShotExport(JSON.stringify(payload));
+  assert.deepEqual(setup.pathPoints, pathPoints);
+  assert.equal(setup.travel, curve.travel);
+  assert.throws(() => readShotExport(JSON.stringify({...payload, end: [1, 1]})), /curve is invalid/);
+  assert.equal(tracePath([[0, 0], [0, 3], [1, 0]]), null);
+});
 
 function rectangle({width = 8, depth = 6, height = 3, camera, actors, slideAxis = [1, 0], aim} = {}) {
   const actorZ = depth * .22;
