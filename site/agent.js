@@ -146,7 +146,7 @@ export async function runAgent(brief, {activity, apply, lockedLens, allowApply, 
         if (!["slide", "push", "pull", "static"].includes(move)) throw Error("Unsupported camera move.");
         const [result] = await compareCapturedRooms([room], args.lens, args.slide, move, requireSightlines || args.requireSightlines === true, undefined, current);
         const id = "shot-" + (candidates.size + 1);
-        const report = {id, model: room.modelId, room: room.roomId || null, requested: args.slide,
+        const report = {id, label: room.label, model: room.modelId, room: room.roomId || null, requested: args.slide,
           lens: args.lens, move, sensorWidthMm: result.setup?.sensorWidthMm ?? null,
           cameraHeight: result.setup?.cameraHeight ?? null, rigRadius: result.setup?.rigRadius ?? null, travel: result.length >= 0 ? result.length : null,
           outcome: result.reason, evaluation: result.evaluation, ceiling: result.ceiling, clearanceMargin: result.clearanceMargin, framingMargin: result.framingMargin,

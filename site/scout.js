@@ -919,20 +919,37 @@ agentForm.addEventListener("submit", async event => {
       },
       onEvidence: ({candidates, unverifiedLeads, recommended, queued}) => {
         agentEvidence.replaceChildren();
-        for (const [heading, entries] of [
-          ["Tested setups", candidates.map(candidate =>
-            [candidate.id, candidate.model, candidate.status, candidate.outcome,
-              candidate.unmet.join(", "),
-              candidate.id === recommended ? "Top technical match" : "",
-              candidate.id === queued ? "Selected proposal" : ""].filter(Boolean).join(" · "))],
-          ["Leads needing room evidence", unverifiedLeads.map(lead =>
-            [lead.name, lead.city, lead.models.length ? "Room outline needed" : "No linked scan"]
-              .filter(Boolean).join(" · "))],
-        ]) {
-          if (!entries.length) continue;
+        if (candidates.length) {
+          const list = element("ol", "");
+          for (const candidate of candidates) {
+            const {id, label, model, status, outcome, unmet, travel, requested,
+              clearanceMargin, framingMargin, sightlinesSampled} = candidate;
+            const entry = element("li", "");
+            entry.append(element("strong", [label || model || id,
+              id === recommended ? "Top technical match" : status,
+              id === queued ? "Selected proposal" : ""].filter(Boolean).join(" · ")));
+            entry.append(element("p", outcome));
+            const measurements = [
+              Number.isFinite(travel) ? travel.toFixed(2) + " m of " + requested.toFixed(2) + " m requested" : "",
+              Number.isFinite(clearanceMargin) ? Math.floor(clearanceMargin * 100) + " cm beyond rig radius" : "",
+              Number.isFinite(framingMargin) ? Math.floor(framingMargin * 100) + "% frame margin" : "",
+              Number.isFinite(travel) ? (sightlinesSampled ? "Sampled sightlines clear" : "Sightlines unverified") : "",
+            ].filter(Boolean);
+            if (measurements.length) entry.append(element("p", measurements.join(" · ")));
+            if (unmet.length) entry.append(element("p", "Unmet requirements · " + unmet.join(", ")));
+            list.append(entry);
+          }
+          agentEvidence.append(element("h3", "Tested setups"), list);
+        }
+        if (unverifiedLeads.length) {
           const list = element("ul", "");
-          list.append(...entries.map(entry => element("li", entry)));
-          agentEvidence.append(element("h3", heading), list);
+          for (const lead of unverifiedLeads) {
+            const entry = element("li", [lead.name, lead.city,
+              lead.models.length ? "Room outline needed" : "No linked scan"].filter(Boolean).join(" · "));
+            if (lead.evidence) entry.append(element("p", lead.evidence));
+            list.append(entry);
+          }
+          agentEvidence.append(element("h3", "Leads needing room evidence"), list);
         }
       },
       activity: text => agentActivity.append(element("li", text)),
