@@ -1,2 +1,181 @@
-# hackprinceton-dljb
-derek and justin hackprinceton fall 2026 hack
+# Scout foundation
+
+Build the local catalog once using the extracted kit directory containing
+commercial-properties.csv and data/commercial-property.jsonl.
+
+    python3 catalog.py build "$HOME/Desktop/costar-hackathon/costar-hackathon-kit"
+    python3 catalog.py search "Houston industrial showroom"
+
+Search returns CoStar property IDs, source snippets, and linked Matterport
+model IDs with captions when available. A result is a lead. Scanned-room
+readiness must be established separately. Initial search uses weighted keyword
+matching. A future agent can call the same search function as a tool.
+
+For each shortlisted model, query room boundaries, scale, and asset availability
+first. Import the MatterPak for selected rooms only. Cache files by model ID
+and room geometry by model and room ID. Keep the catalog database, signed
+URLs, private credentials, and imported scans local.
+
+## Local search and room-plan preview
+
+Run `python3 app.py` from this directory and open http://127.0.0.1:8001/.
+On first launch the app indexes the kit. Use `--kit PATH` if the files are
+elsewhere or `--db PATH` to use an existing catalog. Use `--assets PATH`
+to point to a directory of existing room exports. The default is local-assets/ in this workspace. Use --assets ../hackprinceton-dljb
+to open the legacy checkout. The server reads rooms/MODEL_ID/ROOM_ID.json,
+rooms/MODEL_ID.json, and the legacy room.json. Search, select a linked scan, and choose Inspect room.
+The viewer draws the imported metric outline and reports its bounding spans.
+
+Room inspection loads assets on demand. The app can import additional scans with
+Matterport credentials configured.
+
+## MatterPak workspace
+
+With room assets available offline, Inspect room loads its textured MatterPak
+alongside the captured floor plan and an interactive camera-path diagram.
+Use Play slide or scrub through the move. Lens, sensor width, camera height, and travel are editable.
+The 25 cm rig wall check covers the whole straight path conservatively.
+Fit slide to room finds a shorter centered move that passes the wall check.
+Furniture clearance and actor framing are outside this check.
+
+The renderer uses the capture textures in sRGB with unlit materials, fixed
+16:9 camera framing, and high-quality texture filtering. Lighting in the
+texture comes from the scan. Asset requests are local. The Three.js renderer
+and loaders use jsDelivr.
+
+For the encrypted ZIP already in Downloads, you can build the index without
+extracting the whole kit. The password prompt is private.
+
+    python3 catalog.py build "$HOME/Downloads/costar-hackathon-kit.zip" --password-prompt
+
+If the index cannot be built, the room workspace still starts. You can open
+Greenway directly at http://127.0.0.1:8001/?model=39kv7R6xV7o.
+
+If cloud storage leaves the existing MatterPak OBJ offline, recover the
+already-unlocked bundle into this workspace without overwriting the original:
+
+    python3 fetch_matterpak.py 39kv7R6xV7o
+
+Or import an existing archive with `--zip PATH`. If the workspace is cloud-synced,
+set `SCOUT_MESH_CACHE` to an offline directory before running either the importer
+or the server. A ZIP with a missing referenced texture is rejected before it is cached. Enter API credentials only at the private prompts.
+
+## Import rooms by model ID
+
+Use the Matterport Model API to import selected models on demand:
+
+    python3 import_room.py zvKHR9DHNjJ
+    python3 import_room.py MODEL_ID --room ROOM_ID
+
+The importer saves each closed outline under local-assets/rooms/MODEL_ID/ROOM_ID.json.
+Use --assets PATH on both the importer and server for a different location.
+It skips rooms with missing or unusable boundaries and preserves existing
+exports. To work from saved GraphQL output, add `--response PATH`.
+If the selected scan has multiple imported rooms, the room selector appears
+in the editor. Shot edits and furniture marks are stored per room.
+A missing height stays unknown in the data; the schematic viewer uses 3 m.
+Download textures separately with fetch_matterpak.py for the selected model.
+
+## Compare imported rooms
+
+Open **Compare a shot across imported rooms**, enter a focal length and slide
+distance, and compare the results. The comparison uses the same sensor width
+and rig radius across rooms, with each room's own actor marks. Select
+**Preview compared shot** to open a result in the editor. The initial comparison
+checks room boundaries and sampled framing. Check furniture and captured
+sightlines in the selected room before relying on a setup.
+
+## Tool-calling scout
+
+Set SCOUT_MODEL_URL to the provider's Chat Completions endpoint and
+SCOUT_MODEL_NAME to a tool-capable model. Set SCOUT_MODEL_KEY if required.
+Keep the key in the server environment. Start or restart app.py after configuring it.
+The agent sends the shot brief and the CoStar and room evidence returned by its
+tools to the configured provider. Use a provider permitted to receive that data.
+Inside **Scout with a shot brief**, optionally lock the lens and choose whether
+the agent can open a proposal. The activity list shows actual tool actions.
+Agent proposals currently check walls and sampled framing. The editor separately
+reports annotated furniture clearance and sampled mesh sightlines.
+
+The editor and room comparison support static shots, lateral slides, and
+push-ins. For an open shot the agent can test a follow-up revision in place,
+using the editor's camera lock, actor and aim marks, furniture annotations,
+and optional mesh sightline requirement. A tighter framing request searches
+for a smaller sampled actor framing margin while keeping both stand-ins in
+frame. Failed proposals leave the current shot in place.
+
+Room selection is recorded in the workspace URL. Reloading restores the
+same model and room along with its saved camera settings. Room comparison
+and agent evaluations also account for furniture footprints previously
+marked in that browser. Unmarked furniture and remote mesh sightlines
+remain unverified during cross-room comparison.
+
+Use **Place** on the floor plan to reposition the camera or a staged actor.
+Actor edits re-center camera aim and persist per room. The comparison uses
+the saved marks and includes them when opening the proposed shot. Use
+**Lock current room** to limit agent application to in-place revisions.
+
+## Save a scouting project
+
+Use **Projects → Save project** to store a named project in this browser.
+It includes the search query, brief and agent locks, selected room, shot
+settings, furniture marks, and up to 20 applied agent revisions with their
+tool activity. **Open project** restores the saved settings and runs the
+saved search again. Reloading its workspace URL restores the saved snapshot. Use **Open revision** to revisit an earlier agent setup.
+Saving is explicit. Projects reference local room and mesh assets, so those
+assets must still be available when reopening. **Export project** downloads the
+selected saved snapshot as JSON. **Import project** opens a copy with its own
+project ID. The transfer file includes the brief and agent activity, so review
+it before sharing.
+
+Choose **Camera start** or **Camera end** under **Place**, then click a
+point on the plan. The editor preserves the other endpoint and checks the
+resulting custom path. Paths up to 4 m can be saved with the project and
+exported with their measured start and end marks.
+
+CoStar search also supports exact city and property-type filters. Combine
+them with optional keywords. Property-type filters require the full property
+export because the starter CSV contains addresses and scan IDs.
+
+For cross-room comparisons, **Require captured sightlines** checks five
+camera positions against the MatterPak mesh before proposing a setup. It
+requires a room record with matterpakAlignmentVerified set to true after
+checking model alignment. Greenway uses a checked preset. Missing geometry
+or alignment is reported as unknown. The cross-room search bounds expensive
+mesh checks to eight candidates per room.
+
+With MATTERPORT_API_KEY and MATTERPORT_API_TOKEN configured in the server
+environment, a scan without a local room offers **Import room geometry**.
+This fetches geometry for the selected model and opens the imported room.
+The separate MatterPak importer retrieves textures when needed.
+
+When the selected room has an outline and the server has Matterport
+credentials, **Import MatterPak** can fetch its available bundle from the
+room workspace. The editor keeps the current camera settings during import
+and loads the captured mesh when it becomes available. Imported scans still
+need alignment review before using them for captured sightline checks.
+
+For an imported MatterPak, **Inspect mesh alignment** overlays the metric
+outline on an overhead mesh view. Adjust floor elevation and save the
+review before relying on sampled sightline checks. Reviews are stored
+locally per room under the selected assets directory's alignment folder.
+Changing the underlying OBJ invalidates a saved review.
+
+Rooms without provisional blocking can be staged manually. Place either actor
+first using the floor-plan selector. Partially staged rooms retain their marks
+and remain unevaluated for two-shot framing until both actors are placed.
+
+Saved shot JSON includes the playback duration and smoothstep interpolation
+rule. It reports the actor index, path fraction, and playback time
+when the aligned MatterPak detects an obstruction at a sampled position.
+
+### Import a measured room when the API boundary is open
+
+Select a linked scan and open **Import measured room outline** to upload a
+plan. From the terminal, run
+`python3 import_room.py MODEL_ID --room ROOM_ID --measured outline.json`.
+The JSON file needs `units: "meters"`, `source` describing the measurement,
+and `outline` containing boundary-ordered `[x, z]` pairs in the scan's axes.
+Optional `label` and `height` are supported. Use points measured from the
+actual room or a scaled plan. Place actor marks in the editor and review the
+alignment against the MatterPak before running scan sightline checks.

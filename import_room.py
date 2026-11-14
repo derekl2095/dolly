@@ -1,0 +1,218 @@
+"""Import metric room outlines for a Matterport model or a saved API response."""
+import argparse
+import base64
+import getpass
+import json
+import math
+import os
+from pathlib import Path
+from urllib.error import URLError
+from urllib.request import Request, urlopen
+
+DEFAULT_ASSETS = Path(__file__).resolve().parent / "local-assets"
+QUERY = """query Room($id: ID!) { model(id: $id) {
+  id
+  floors { id vertices { id position { x y } } edges { id vertices { id } } }
+  rooms { id floor { id } classifications { label confidence } boundary { edges { id } } dimensions(units: metric) { height } }
+} }"""
+
+
+def outline(room, floor):
+    vertices = {v["id"]: (v["position"]["x"], v["position"]["y"])
+                for v in floor["vertices"] if v.get("position")}
+    edges = {e["id"]: [v["id"] for v in e["vertices"]] for e in floor["edges"]}
+    segments = [edges.get(e["id"], []) for e in (room.get("boundary") or {}).get("edges", [])]
+    if len(segments) < 3 or any(len(e) != 2 for e in segments):
+        raise ValueError("Matterport returned an incomplete boundary.")
+    loop = segments.pop(0).copy()
+    while segments:
+        end = loop[-1]
+        index = next((i for i, e in enumerate(segments) if end in e), None)
+        if index is None or end in loop[:-1]:
+            raise ValueError("Room edges do not form one closed outline.")
+        a, b = segments.pop(index)
+        loop.append(b if a == end else a)
+    if loop[0] != loop[-1]:
+        raise ValueError("Room outline is open.")
+    points = [vertices[v] for v in loop[:-1]]
+    if not all(math.isfinite(value) for point in points for value in point):
+        raise ValueError("Room coordinates are invalid.")
+    return points
+
+
+def stage(points):
+    # Find a small rectangle inside the outline for provisional actor and camera marks.
+    edges = list(zip(points, points[1:] + points[:1]))
+    x0, x1 = min(x for x, _ in points), max(x for x, _ in points)
+    z0, z1 = min(z for _, z in points), max(z for _, z in points)
+    for iz in sorted(range(1, 24), key=lambda n: abs(n - 12)):
+        for ix in sorted(range(1, 24), key=lambda n: abs(n - 12)):
+            x = x0 + (x1 - x0) * ix / 24
+            z = z0 + (z1 - z0) * iz / 24
+            left, right, front, back = x - .9, x + .9, z - 1.65, z + 1.75
+            crossings = sum((az > z) != (bz > z) and
+                            x < ax + (bx - ax) * (z - az) / (bz - az)
+                            for (ax, az), (bx, bz) in edges)
+            boundary_nearby = any(max(ax, bx) >= left and min(ax, bx) <= right and
+                                  max(az, bz) >= front and min(az, bz) <= back
+                                  for (ax, az), (bx, bz) in edges)
+            if crossings % 2 and not boundary_nearby:
+                return [[x - .6, z - 1.25], [x + .6, z - 1.25]], [x, z + 1.45]
+    raise ValueError("Could not place the starter shot inside the returned outline.")
+
+
+def read_model(model_id, *, interactive=True):
+    key = os.getenv("MATTERPORT_API_KEY")
+    token = os.getenv("MATTERPORT_API_TOKEN")
+    if interactive:
+        key = key or getpass.getpass("Matterport API key: ")
+        token = token or getpass.getpass("Matterport API token: ")
+    if not key or not token:
+        raise ValueError("Matterport API credentials are unavailable.")
+    auth = base64.b64encode(f"{key.strip()}:{token.strip()}".encode()).decode()
+    request = Request("https://api.matterport.com/api/models/graph",
+                      json.dumps({"query": QUERY, "variables": {"id": model_id}}).encode(),
+                      {"Authorization": f"Basic {auth}", "Content-Type": "application/json"})
+    with urlopen(request, timeout=45) as response:
+        return json.load(response)
+
+
+def import_rooms(model_id, payload, destination, room_id=None):
+    model = (payload.get("data") or {}).get("model")
+    if not model or (model.get("id") and model["id"] != model_id):
+        raise ValueError("Matterport did not return model geometry.")
+    floors = {floor["id"]: floor for floor in model["floors"]}
+    rooms = [room for room in model["rooms"] if room_id is None or room["id"] == room_id]
+    if not rooms:
+        raise ValueError("No matching rooms in API response.")
+    imported = []
+    skipped = []
+    for room in rooms:
+        identifier = room["id"]
+        if not valid_id(identifier):
+            skipped.append((identifier, "Unsupported room identifier"))
+            continue
+        try:
+            points = outline(room, floors[room["floor"]["id"]])
+            area = abs(sum(a[0] * b[1] - b[0] * a[1]
+                           for a, b in zip(points, points[1:] + points[:1]))) / 2
+            if area < .01:
+                raise ValueError("Room outline has negligible area.")
+        except (ValueError, KeyError, TypeError) as error:
+            skipped.append((identifier, str(error)))
+            continue
+        height = (room.get("dimensions") or {}).get("height")
+        if not isinstance(height, (int, float)) or not 0 < height < math.inf:
+            height = None
+        labels = room.get("classifications") or []
+        label = next((entry.get("label") for entry in labels if entry.get("label")), None)
+        record = {
+            "schemaVersion": 1, "modelId": model_id, "roomId": identifier,
+            "floorId": room["floor"]["id"], "label": label or f"Room {identifier}",
+            "units": "meters", "outline": points, "height": height,
+            "geometrySource": "Matterport room boundary", "staging": "provisional",
+        }
+        try:
+            record["actors"], record["camera"] = stage(points)
+        except ValueError:
+            record["actors"] = []
+        target = destination / model_id / f"{identifier}.json"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            with target.open("x", encoding="utf-8") as file:
+                json.dump(record, file, indent=2, allow_nan=False)
+        except FileExistsError:
+            skipped.append((identifier, "Already imported"))
+            continue
+        imported.append(target)
+    return imported, skipped
+
+
+def import_measured_room(model_id, room_id, payload, destination):
+    """Import an operator-measured room in the scan's horizontal axes."""
+    if not valid_id(room_id) or not isinstance(payload, dict):
+        raise ValueError("A measured import needs a room identifier and a JSON object.")
+    points = payload.get("outline")
+    source = payload.get("source")
+    if payload.get("units") != "meters" or not isinstance(source, str) or not source.strip():
+        raise ValueError("Supply meter units and a measurement source.")
+    if not isinstance(points, list) or not 3 <= len(points) <= 500 or any(
+            not isinstance(point, list) or len(point) != 2 or any(
+                type(value) not in (int, float) or not math.isfinite(value) for value in point)
+            for point in points):
+        raise ValueError("Supply at least three finite [x, z] points in boundary order.")
+    if points[0] == points[-1]:
+        points = points[:-1]
+    if len(set(map(tuple, points))) != len(points) or len(points) < 3:
+        raise ValueError("Outline vertices must be distinct.")
+    edges = list(zip(points, points[1:] + points[:1]))
+    def orientation(a, b, c):
+        return (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
+    for index, (a, b) in enumerate(edges):
+        for other in range(index + 2, len(edges)):
+            if index == 0 and other == len(edges) - 1:
+                continue
+            c, d = edges[other]
+            overlaps = all(max(min(a[i], b[i]), min(c[i], d[i])) <=
+                           min(max(a[i], b[i]), max(c[i], d[i])) for i in (0, 1))
+            if overlaps and orientation(a, b, c) * orientation(a, b, d) <= 0 and (
+                    orientation(c, d, a) * orientation(c, d, b) <= 0):
+                raise ValueError("Outline edges must not cross or touch.")
+    if abs(sum(a[0] * b[1] - b[0] * a[1] for a, b in edges)) < .02:
+        raise ValueError("Room outline has negligible area.")
+    height = payload.get("height")
+    if height is not None and (type(height) not in (int, float) or not 0 < height < math.inf):
+        raise ValueError("Height must be a positive meter value.")
+    label = payload.get("label")
+    if label is not None and (not isinstance(label, str) or not 0 < len(label.strip()) <= 100):
+        raise ValueError("Room label must contain 1–100 characters.")
+    record = {
+        "schemaVersion": 1, "modelId": model_id, "roomId": room_id,
+        "label": label or f"Room {room_id}", "units": "meters",
+        "outline": points, "height": height, "actors": [],
+        "geometrySource": "Operator-measured boundary: " + source.strip(),
+        "staging": "unplaced", "matterpakAlignmentVerified": False,
+    }
+    target = destination / model_id / f"{room_id}.json"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with target.open("x", encoding="utf-8") as file:
+        json.dump(record, file, indent=2, allow_nan=False)
+    return target
+
+
+def valid_id(value):
+    return isinstance(value, str) and 1 <= len(value) <= 128 and all(
+        character.isascii() and (character.isalnum() or character in "-_") for character in value)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("model")
+    parser.add_argument("--room")
+    inputs = parser.add_mutually_exclusive_group()
+    inputs.add_argument("--response", type=Path, help="Read a saved GraphQL JSON response")
+    inputs.add_argument("--measured", type=Path, help="Import a locally measured metric room outline")
+    parser.add_argument("--assets", type=Path, default=DEFAULT_ASSETS)
+    args = parser.parse_args()
+    if not valid_id(args.model) or not args.model.isalnum() or len(args.model) > 40:
+        parser.error("Invalid model ID.")
+    try:
+        destination = args.assets / "rooms"
+        if args.measured:
+            imported = [import_measured_room(args.model, args.room, json.loads(args.measured.read_text()), destination)]
+            skipped = []
+        else:
+            payload = json.loads(args.response.read_text()) if args.response else read_model(args.model)
+            imported, skipped = import_rooms(args.model, payload, destination, args.room)
+    except (URLError, OSError, ValueError, TypeError, KeyError) as error:
+        parser.exit(1, f"Room import stopped: {error}\n")
+    for target in imported:
+        print(f"Imported {target}")
+    for identifier, reason in skipped:
+        print(f"Skipped {identifier}: {reason}")
+    if not imported:
+        parser.exit(1, "No new room outlines were imported.\n")
+
+
+if __name__ == "__main__":
+    main()

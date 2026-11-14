@@ -1,0 +1,7 @@
+catalog.sqlite*
+__pycache__/
+/mesh-cache/
+/capture-cache/
+/rooms/
+/alignment/
+/local-assets/

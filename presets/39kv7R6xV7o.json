@@ -1,0 +1,26 @@
+{
+  "label": "Twelve Greenway Plaza",
+  "camera": [
+    -3.35,
+    -0.48
+  ],
+  "actors": [
+    [
+      0.55,
+      0.37
+    ],
+    [
+      0.35,
+      1.02
+    ]
+  ],
+  "slideAxis": [
+    0,
+    1
+  ],
+  "heightEstimated": true,
+  "cameraHeight": 1.38,
+  "aimHeight": 1.05,
+  "matterpakAlignmentVerified": true,
+  "alignmentEvidence": "Meter-scale OBJ bounds agree with the room outline to within 0.22 m; preview viewed against the captured room plan. Local detail and furniture may differ."
+}

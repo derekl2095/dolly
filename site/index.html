@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Location Scout</title>
+<style>
+:root {color-scheme:dark;font:16px system-ui;background:#181b1c;color:#f1efe8}
+body {margin:0} main {max-width:1100px;margin:auto;padding:clamp(20px,5vw,60px)}
+h1 {font-size:clamp(42px,7vw,78px);letter-spacing:-.07em;margin:0 0 24px}
+form {display:flex;gap:10px;margin-bottom:16px} input,button,select {font:inherit;border-radius:6px;padding:9px}
+input {flex:1;min-width:0} button {background:#f1b87b;color:#252017;border:0;cursor:pointer}
+button:disabled {opacity:.5} a {color:#f1b87b}
+.layout {display:grid;grid-template-columns:minmax(230px, .6fr) minmax(0,1.6fr);gap:24px;align-items:start}
+.layout:has(#results:empty) {grid-template-columns:minmax(0,1fr)}
+#results:empty {display:none}
+#results {max-height:75vh;overflow:auto;padding-right:4px}
+#results article {overflow-wrap:anywhere}
+#workspace aside {min-width:0}
+article, aside {border:1px solid #454b4a;background:#222728;border-radius:10px;padding:16px;margin-bottom:12px}
+h2,h3,p {margin:0 0 10px} article p,#status,#room-status {color:#c8cdca} article button {margin:8px 8px 0 0}
+select {max-width:100%} canvas {width:100%;display:block;margin-top:12px;background:#171a1a;border-radius:6px}
+[hidden] {display:none!important}
+#room-status {font-size:.875rem}
+#compare,#agent-panel,#projects {margin-bottom:16px}
+#compare summary,#agent-panel summary,#projects summary {cursor:pointer;color:#f1b87b}
+#scout-search {flex-wrap:wrap;align-items:center}
+#compare-form,#agent-form,#project-form {margin-top:12px;flex-wrap:wrap}
+#compare-form input {width:70px}
+#shot-grid {display:grid;grid-template-columns:minmax(0,2fr) minmax(180px,1fr);gap:12px}
+#plan {margin-top:0;align-self:start}
+@media(max-width:800px){#shot-grid{grid-template-columns:1fr}}
+#framing,#clearance,#revision,#sightline {font-size:.875rem}
+#clearance,#framing {margin-bottom:6px}
+#viewport + p {margin-top:8px}
+#capture {margin:12px 0 0}
+#capture img {margin-top:8px;width:100%;display:block;border-radius:6px}
+#capture summary {cursor:pointer;color:#c8cdca}
+#retry-mesh {margin-bottom:10px}
+#clearance[data-result="fail"] {color:#ff9c92}
+#clearance[data-result="pass"] {color:#a7d9bd}
+#plan {cursor:crosshair;touch-action:none}
+#plan-tools {display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin-top:10px}
+#plan-tools p {font-size:.85rem;color:#c8cdca;margin:0}
+#mark-obstacle[aria-pressed="true"] {background:#ff9c92}
+#viewport {position:relative}
+#camera-hud {position:absolute;inset:0;pointer-events:none;display:flex;justify-content:space-between;align-items:flex-end;padding:12px;color:#fff;font:12px ui-monospace,monospace;text-shadow:0 1px 4px #000}
+#camera-hud span {background:#181a1bc9;padding:4px 7px;border-radius:4px}
+#viewport {aspect-ratio:16/9; background:#141514; overflow:hidden; border-radius:6px}
+#viewport canvas {height:100%;margin:0}
+#shot-grid:has(#viewport[hidden]) {grid-template-columns:1fr}
+#transport {display:flex; gap:8px; flex-wrap:wrap; margin:12px 0}
+#transport label {display:flex; align-items:center;gap:6px}
+#transport input[type="range"] {width:90px;padding:0}
+@media(max-width:700px){.layout{grid-template-columns:1fr}}
+</style>
+</head>
+<body><main>
+<h1>Location Scout</h1>
+<details id="projects">
+<summary>Projects</summary>
+<form id="project-form">
+<label>Project name <input name="title" required maxlength="100" placeholder="Interview location scout"></label>
+<button>Save project</button>
+<button id="new-project" type="button">New project</button>
+</form>
+<label>Saved projects <select id="project-list"><option value="">Choose a project</option></select></label>
+<button id="open-project" type="button">Open project</button>
+<button id="export-project" type="button">Export project</button>
+<label>Import project <input id="import-project" type="file" accept=".json,application/json"></label>
+<label>Open shot export <input id="import-shot" type="file" accept=".json,application/json"></label>
+<p id="project-status" role="status"></p>
+<details hidden id="project-history"><summary>Agent revisions</summary><ol></ol></details>
+</details>
+<form id="scout-search"><input name="q" aria-label="Search CoStar properties" maxlength="240" placeholder="Showroom with storefront glass">
+<label>City <select name="city"><option value="">Any city</option><option>Houston</option><option>Los Angeles</option></select></label>
+<label>Property type <select name="category"><option value="">Any type</option><option value="office">Office</option><option value="industrial warehouse">Industrial</option><option value="retail">Retail</option><option value="flex">Flex</option><option value="hotel hospitality">Hotel</option><option value="apartment multifamily">Apartment</option><option value="land">Land</option></select></label>
+<label><input name="linked" type="checkbox" value="1"> Linked Matterport scans only</label>
+<label><input name="imported" type="checkbox" value="1"> Imported room outlines only</label>
+<button>Search CoStar</button></form>
+<p id="status" role="status"></p>
+<details id="agent-panel">
+<summary>Scout with a shot brief</summary>
+<form id="agent-form">
+<label>Shot brief <input name="brief" maxlength="1200" required placeholder="A 35 mm two-shot in a Houston office"></label>
+<label>Lock lens (mm) <input name="lens" type="number" min="15" max="150" placeholder="Optional"></label>
+<label>Minimum travel (m) <input name="minimum-travel" type="number" min="0" max="4" step="any" placeholder="Optional"></label>
+<label><input name="require-sightlines" type="checkbox"> Require captured sightlines for agent proposals</label>
+<label><input name="shortlist-only" type="checkbox"> Scout shortlisted scans only</label>
+<label><input name="lock-room" type="checkbox"> Lock current room</label>
+<label><input name="apply" type="checkbox" checked> Open checked proposal</label>
+<p>Catalog searches use the city and property type selected above.</p>
+<button>Investigate</button>
+</form>
+<p id="agent-result" role="status"></p>
+<ol id="agent-activity" aria-label="Scouting activity"></ol>
+<button id="undo-agent" type="button" hidden>Undo applied proposal</button>
+</details>
+<details id="compare">
+<summary>Compare a shot across imported rooms</summary>
+<form id="compare-form">
+<label>Lens (mm) <input name="lens" type="number" min="15" max="150" value="35" required></label>
+<label>Sensor width (mm) <input name="sensor" type="number" min="8" max="65" step=".01" value="36" required></label>
+<label>Camera height (m) <input name="height" type="number" min=".15" max="4" step=".01" value="1.42" required></label>
+<label>Rig radius (m) <input name="rig" type="number" min=".05" max="1.5" step=".01" value=".25" required></label>
+<label>Target travel (m) <input name="slide" type="number" min="0" max="4" step=".05" value=".7" required></label>
+<label>Minimum travel (m) <input name="minimum-travel" type="number" min="0" max="4" step="any" value="0" required></label>
+<label>Move <select name="move"><option value="slide">Lateral slide</option><option value="push">Push-in</option><option value="pull">Pull-back</option><option value="static">Static</option><option value="custom" hidden>Custom path</option></select></label>
+<label><input name="sightlines" type="checkbox"> Require captured sightlines</label>
+<label><input name="shortlisted" type="checkbox"> Shortlisted scans only</label>
+<button>Compare rooms</button>
+</form>
+<p id="compare-status" role="status"></p>
+<div id="compare-results"></div>
+</details>
+<div id="workspace" class="layout">
+
+<details id="shortlist" hidden><summary>Shortlisted scans</summary><ul></ul></details>
+<section id="results" aria-label="Property matches"></section>
+<aside><h2 id="room-title">Room plan</h2><p id="room-status" role="status">Select a linked scan to inspect its imported geometry.</p><details id="measured-room" hidden>
+<summary>Import measured room outline</summary>
+<form>
+<label>Room ID <input name="room" required maxlength="128" pattern="[A-Za-z0-9_\-]+" placeholder="showroom"></label>
+<label>Measured outline JSON <input name="plan" type="file" accept=".json,application/json" required></label>
+<button>Import outline</button>
+<p>Use a measured plan in meters and include its source. Review alignment before running mesh sightline checks.</p>
+<p role="status"></p>
+</form>
+</details><label id="room-picker" hidden>Room <select aria-label="Imported room"></select></label><div id="shot-grid"><div id="viewport" hidden>
+<div id="camera-hud" aria-hidden="true"><span id="shot-time">00:00.0</span><span id="shot-lens">35 mm</span></div>
+</div><canvas id="plan" width="720" height="500" hidden aria-label="Scaled room outline. Click to place the selected mark"></canvas></div><p id="render-status" role="status"></p>
+<form id="alignment" hidden>
+<button type="button" id="alignment-view" aria-pressed="false">Inspect mesh alignment</button>
+<label>Floor elevation (m) <input name="height" type="number" step="any" min="-200" max="200" required></label>
+<label><input name="accepted" type="checkbox"> I checked the outline and floor elevation against the mesh</label>
+<button>Save alignment review</button>
+</form><p id="alignment-status" role="status"></p>
+<button id="import-mesh" type="button" hidden>Import MatterPak</button>
+<label id="upload-mesh" hidden>Use a MatterPak ZIP <input type="file" accept=".zip,application/zip"></label>
+<button id="retry-mesh" type="button" hidden>Retry captured mesh</button>
+<div id="transport" hidden>
+<button id="play" type="button">Play shot</button>
+<label>Move <select id="move-kind"><option value="slide">Lateral slide</option><option value="push">Push-in</option><option value="pull">Pull-back</option><option value="static">Static</option><option value="custom" hidden>Custom path</option></select></label>
+<button id="export-shot" type="button">Save shot</button>
+<button id="fit" type="button">Fit slide to room</button>
+<label><input type="checkbox" id="keep-mark" checked> Keep camera mark</label>
+<label><input type="checkbox" id="check-scan"> Require sampled mesh sightlines</label>
+<label><input type="checkbox" id="show-marks"> Show actor stand-ins</label>
+<label>Duration (seconds) <input id="shot-duration" type="range" min=".5" max="30" step=".1"><output id="duration-value"></output></label>
+<label>Position <input id="timeline" type="range" min="0" max="1000" value="500"></label>
+<label>Sensor width <input id="sensor-width" type="range" min="8" max="65" step=".01"><output id="sensor-value"></output></label>
+<label>Camera height <input id="camera-height" type="range" min=".15" max="4" step=".01"><output id="height-value"></output></label>
+<label>Rig radius <input id="rig-radius" type="range" min=".05" max="1.5" step=".01"><output id="rig-value"></output></label>
+<label>Lens <input id="lens" type="range" min="15" max="150" value="35"><output id="focal">35 mm</output></label>
+<label>Travel <input id="travel" type="range" min="0" max="4" step="any" value=".7"><output id="distance">0.70 m</output></label>
+</div><p id="clearance" role="status"></p><p id="ceiling" role="status"></p><p id="framing" role="status"></p><p id="sightline" role="status"></p>
+<div id="sightline-actions" hidden>
+<button id="view-obstruction" type="button">Jump to blocked view</button>
+<button id="fit-sightlines" type="button">Find a clear move</button>
+</div>
+<div id="plan-tools" hidden>
+<label>Place <select id="place-mark"><option value="camera">Camera center</option><option value="start">Camera start</option><option value="end">Camera end</option><option value="aim">Camera aim</option><option value="0">Actor 1</option><option value="1">Actor 2</option></select></label>
+<button id="center-aim" type="button">Aim at actors</button>
+<button id="mark-obstacle" type="button" aria-pressed="false">Mark furniture</button>
+<button id="undo-obstacle" type="button" disabled>Undo last mark</button>
+<p id="plan-instructions">Click the plan to place the selected mark.</p>
+</div><form id="direction" hidden>
+<input aria-label="Camera direction" placeholder="Try a 1.5 m slide" maxlength="160" required>
+<button>Replan shot</button>
+</form><p id="revision" role="status"></p>
+<details id="capture" hidden open>
+<summary>Captured floor plan</summary>
+<img alt="Photographic floor plan captured by Matterport">
+</details></aside>
+</div>
+</main>
+<script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"}}</script>
+<script type="module" src="scout.js"></script></body></html>
