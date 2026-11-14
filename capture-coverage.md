@@ -40,11 +40,11 @@ python3 exterior_coverage.py 234298 LONGITUDE LATITUDE --block WEST SOUTH EAST N
 ```
 
 The plan prints the two Vexcel v2 coverage requests without credentials.
-With a token entitled to oriented imagery and DSM, run the same request without
-`--plan`. Coverage metadata alone does not establish that any raster was
-retrieved. Record the selected image's capture date and the DSM's vertical units,
-pixel size and raster CRS from the returned asset or its metadata, independently
-of the WGS84 query CRS.
+With `VEXCEL_API_KEY` set, run the same request without `--plan`. The key is
+sent in the `X-API-KEY` header. Coverage metadata alone does not establish that
+any raster was retrieved. Record the selected image's capture date and the DSM's
+vertical units, pixel size and raster CRS from the returned asset or its
+metadata, independently of the WGS84 query CRS.
 
 Unauthenticated requests to both collection endpoints returned HTTP 403.
 Property coverage, façade imagery, capture date and DSM remain unverified.
@@ -59,7 +59,7 @@ Canal Street Flats (CoStar `9459693`, model `BZ5AMGkJP7s`) was imported after th
 
 ## Vexcel asset requests after coverage is confirmed
 
-Use the collection’s layer and a verified oblique image name. Keep the token local.
+Use the collection’s layer and a verified oblique image name. Keep the API key local.
 
 | Evidence | Vexcel v2 operation | Parameters |
 | --- | --- | --- |
