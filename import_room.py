@@ -76,16 +76,35 @@ def outline(room, floor):
     segments = [edges.get(e["id"], []) for e in (room.get("boundary") or {}).get("edges", [])]
     if len(segments) < 3 or any(len(e) != 2 for e in segments):
         raise ValueError("Matterport returned an incomplete boundary.")
-    loop = segments.pop(0).copy()
-    while segments:
-        end = loop[-1]
-        index = next((i for i, e in enumerate(segments) if end in e), None)
-        if index is None or end in loop[:-1]:
-            raise ValueError("Room edges do not form one closed outline.")
-        a, b = segments.pop(index)
-        loop.append(b if a == end else a)
-    if loop[0] != loop[-1]:
-        raise ValueError("Room outline is open.")
+    neighbors = {}
+    unique = set()
+    for start, end in segments:
+        edge = frozenset((start, end))
+        if len(edge) != 2 or edge in unique:
+            raise ValueError("Room boundary contains duplicate or degenerate edges.")
+        unique.add(edge)
+        neighbors.setdefault(start, set()).add(end)
+        neighbors.setdefault(end, set()).add(start)
+
+    # Strip dead-end branches. Every retained segment must already exist in
+    # Matterport's graph, and the remainder must be one unambiguous loop.
+    leaves = [vertex for vertex, adjacent in neighbors.items() if len(adjacent) == 1]
+    while leaves:
+        vertex = leaves.pop()
+        adjacent = neighbors.pop(vertex)
+        for other in adjacent:
+            neighbors[other].remove(vertex)
+            if len(neighbors[other]) == 1:
+                leaves.append(other)
+    if len(neighbors) < 3 or any(len(adjacent) != 2 for adjacent in neighbors.values()):
+        raise ValueError("Room edges do not form one closed outline.")
+    start = next(iter(neighbors))
+    loop = [start, next(vertex for vertex in neighbors if vertex in neighbors[start])]
+    while loop[-1] != start:
+        (following,) = neighbors[loop[-1]] - {loop[-2]}
+        loop.append(following)
+    if len(loop) != len(neighbors) + 1:
+        raise ValueError("Room edges do not form one closed outline.")
     points = [vertices[v] for v in loop[:-1]]
     if not all(math.isfinite(value) for point in points for value in point):
         raise ValueError("Room coordinates are invalid.")

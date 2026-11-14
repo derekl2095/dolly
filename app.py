@@ -1,5 +1,6 @@
 """Serve the local scouting catalog and model-specific room exports."""
 import argparse
+import csv
 import getpass
 import json
 import math
@@ -57,10 +58,30 @@ def load_matterport_keychain():
             os.environ[variable] = result.stdout.strip()
 
 
+def load_outline_index(path):
+    """Load previously verified Matterport metadata checks."""
+    records = {}
+    if not path.is_file():
+        return records
+    with path.open(newline="", encoding="utf-8") as stream:
+        for row in csv.DictReader(stream):
+            model = row.get("model_id", "")
+            count = row.get("closed_rooms", "")
+            if not re.fullmatch(r"[A-Za-z0-9]{1,40}", model or ""):
+                continue
+            status = row.get("status") or ("closed" if count and count != "0" else "")
+            if status == "closed" and re.fullmatch(r"[1-9][0-9]{0,5}", count or ""):
+                records[model] = (status, int(count))
+            elif status in {"no-floor-edges", "no-room-edges", "no-room-records", "boundary-rejected", "unavailable", "request-failed"}:
+                records[model] = (status, 0)
+    return records
+
+
 class ScoutServer(ThreadingHTTPServer):
-    def __init__(self, address, database, assets):
+    def __init__(self, address, database, assets, outline_index=None):
         self.database = database
         self.assets = assets
+        self.outline_index = outline_index or {}
         self.mesh_import_lock = Lock()
         self.mesh_imports = WeakValueDictionary()
         super().__init__(address, Handler)
@@ -167,7 +188,9 @@ class ScoutServer(ThreadingHTTPServer):
 
     def scan_readiness(self, model):
         rooms = self.rooms(model)
-        result = {"roomCount": len(rooms), "meshAvailable": False, "alignedRoomCount": 0}
+        status, count = self.outline_index.get(model, ("unchecked", 0))
+        result = {"roomCount": len(rooms), "meshAvailable": False, "alignedRoomCount": 0,
+                  "remoteRoomCount": count, "remoteOutlineStatus": status}
         if not rooms:
             return result
         if not self.mesh_available(model):
@@ -465,8 +488,12 @@ class Handler(SimpleHTTPRequestHandler):
         if url.path == "/api/locations":
             try:
                 imported_models = None
-                if params.get("imported", [""])[0] == "1":
+                confirmed = params.get("confirmed", [""])[0] == "1"
+                if confirmed or params.get("imported", [""])[0] == "1":
                     imported_models = {room["modelId"] for room in self.server.imported_rooms()}
+                    if confirmed:
+                        imported_models.update(model for model, (_, count) in
+                                               self.server.outline_index.items() if count)
                 page = search_page(self.server.database, params.get("q", [""])[0][:240],
                               offset=int(params.get("offset", ["0"])[0]),
                               limit=int(params.get("limit", ["12"])[0]),
@@ -531,6 +558,7 @@ def main():
     parser.add_argument("--assets", type=Path, default=DEFAULT_ASSETS)
     parser.add_argument("--kit", type=Path, default=Path(os.environ.get(
         "COSTAR_KIT", Path.home() / "Desktop/costar-hackathon/costar-hackathon-kit")))
+    parser.add_argument("--outline-index", type=Path, default=ROOT / "data" / "matterport-outline-index.csv")
     parser.add_argument("--port", type=int, default=8001)
     args = parser.parse_args()
     if sys.platform == "darwin" and "SSL_CERT_FILE" not in os.environ:
@@ -560,7 +588,12 @@ def main():
                 index_property_coordinates(args.db, args.kit)
         except (OSError, sqlite3.Error, ValueError) as error:
             print(f"CoStar coordinates unavailable: {error}", flush=True)
-    with ScoutServer(("127.0.0.1", args.port), args.db, args.assets) as server:
+    try:
+        outline_index = load_outline_index(args.outline_index)
+    except (OSError, UnicodeError, csv.Error):
+        print("Matterport outline index could not be loaded.", flush=True)
+        outline_index = {}
+    with ScoutServer(("127.0.0.1", args.port), args.db, args.assets, outline_index) as server:
         print(f"Open http://127.0.0.1:{server.server_port}/", flush=True)
         server.serve_forever()
 

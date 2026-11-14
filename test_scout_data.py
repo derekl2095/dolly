@@ -47,6 +47,26 @@ class CatalogTests(unittest.TestCase):
             self.assertEqual([row["models"] for row in filtered["results"]], [{"ScanA": "Loft"}])
 
 
+    def test_shared_outline_snapshot_distinguishes_remote_ready_and_empty_scans(self):
+        from app import ScoutServer, load_outline_index
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            index = root / "outlines.csv"
+            index.write_text("model_id,status,closed_rooms\n"
+                             "Remote,closed,3\n"
+                             "Empty,no-floor-edges,0\n"
+                             "Unavailable,request-failed,0\n"
+                             "Bad,closed,0\n")
+            server = object.__new__(ScoutServer)
+            server.assets = root
+            server.outline_index = load_outline_index(index)
+            self.assertEqual(server.scan_readiness("Remote")["remoteRoomCount"], 3)
+            self.assertEqual(server.scan_readiness("Remote")["roomCount"], 0)
+            self.assertEqual(server.scan_readiness("Empty")["remoteOutlineStatus"], "no-floor-edges")
+            self.assertEqual(server.scan_readiness("Bad")["remoteOutlineStatus"], "unchecked")
+
+
 class CaptureTests(unittest.TestCase):
     def test_local_status_requires_diffuse_texture(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -78,6 +98,23 @@ class StoredLocallyTests(unittest.TestCase):
         self.assertFalse(stored_locally(SimpleNamespace(st_size=10, st_blocks=0)))
         self.assertFalse(stored_locally(SimpleNamespace(st_size=0, st_blocks=4)))
         self.assertTrue(stored_locally(SimpleNamespace(st_size=10, st_blocks=4)))
+
+
+class OutlineTopologyTests(unittest.TestCase):
+    def test_dangling_edges_keep_the_existing_cycle(self):
+        from import_room import outline
+
+        coords = {"a": (0, 0), "b": (2, 0), "c": (2, 2), "d": (0, 2), "e": (3, 0)}
+        segments = ["be", "ab", "bc", "cd", "da"]
+        floor = {
+            "vertices": [{"id": key, "position": {"x": x, "y": y}} for key, (x, y) in coords.items()],
+            "edges": [{"id": segment, "vertices": [{"id": key} for key in segment]} for segment in segments],
+        }
+        room = {"boundary": {"edges": [{"id": segment} for segment in segments]}}
+        self.assertEqual(set(outline(room, floor)), {(0, 0), (2, 0), (2, 2), (0, 2)})
+        room["boundary"]["edges"].pop()
+        with self.assertRaisesRegex(ValueError, "closed outline"):
+            outline(room, floor)
 
 
 if __name__ == "__main__":

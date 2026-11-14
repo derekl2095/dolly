@@ -320,6 +320,12 @@ function card(row, readiness = {}) {
       if (scan.alignedRoomCount) status = scan.alignedRoomCount + " aligned scan room(s)";
       else if (scan.meshAvailable) status = "Mesh needs alignment review";
       else if (scan.roomCount) status = "Room outline only";
+      else if (scan.remoteRoomCount) status = scan.remoteRoomCount + " confirmed outlines · import on open";
+      else if (scan.remoteOutlineStatus === "no-floor-edges") status = "Matterport returned no floor edges";
+      else if (["no-room-edges", "no-room-records", "boundary-rejected"].includes(scan.remoteOutlineStatus))
+        status = "No usable room outline";
+      else if (["unavailable", "request-failed"].includes(scan.remoteOutlineStatus))
+        status = "Matterport outline check unavailable";
       else status = "Room outline unverified";
     }
     scans.add(new Option((caption?.trim() || `Scan ${index + 1}`) + " · " + status, id));
@@ -675,8 +681,8 @@ async function loadLocationPage(filters) {
     moreLocations.hidden = !nextLocationPage;
     const count = results.children.length;
     const coverage = mode === "addresses" ? " · CoStar addresses and scan links only" : "";
-    const noMatches = filters.get("imported") === "1"
-      ? "No matches with a confirmed room outline on this Mac. Clear the outline filter to include unverified scans."
+    const noMatches = filters.get("confirmed") === "1"
+      ? "No matches with a confirmed room outline. Clear the outline filter to include unverified scans."
       : "No matching properties.";
     status.textContent = (count ? count + " property matches shown" : noMatches) + coverage;
   } catch (error) {
@@ -689,6 +695,10 @@ async function loadLocationPage(filters) {
 form.addEventListener("submit", event => {
   event.preventDefault();
   const filters = new URLSearchParams(new FormData(form));
+  if (filters.has("imported")) {
+    filters.delete("imported");
+    filters.set("confirmed", "1");
+  }
   const browsing = Object.hasOwn(workspace.dataset, "browse");
   resetLocationSearch(filters.get("city"));
   if (browsing) workspace.dataset.browse = "";

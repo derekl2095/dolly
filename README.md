@@ -31,6 +31,14 @@ With Matterport credentials on the server, it imports missing room outlines,
 opens the first available room, and loads its cached or freshly downloaded
 MatterPak. Use the room selector if the scan has several rooms.
 
+CoStar search includes the full linked-scan catalog even when scans have not
+been checked. **Confirmed closed room outlines only** uses locally imported
+rooms plus the shared Matterport snapshot at `data/matterport-outline-index.csv`.
+The snapshot stores model IDs, outline status, and usable room counts and is
+loaded at startup on every checkout. Use `--outline-index PATH` to test an
+updated CSV. Opening a confirmed scan still imports its room geometry and,
+when available, its MatterPak on demand.
+
 ## MatterPak workspace
 
 With room assets available offline, Inspect room loads its textured MatterPak
