@@ -125,6 +125,7 @@ test("a brief searches the catalog and keeps the exact checked setup available a
   assert.deepEqual(opened.setup.aim, room.lookAt);
   assert.deepEqual(opened.setup.actors, room.actors);
   assert.deepEqual(evidence.unverifiedLeads.map(lead => lead.id), [3]);
+  assert.deepEqual(evidence.coverage, {propertiesFound: 3, shortlistedScans: null, roomsEvaluated: 2});
 });
 
 test("the agent imports only an inspected scan with explicit permission", async () => {

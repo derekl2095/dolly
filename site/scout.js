@@ -960,7 +960,7 @@ agentForm.addEventListener("submit", async event => {
     agentResult.textContent = await runAgent(constraints.brief + prior, {
       ...constraints,
       currentModel: initialRoom?.modelId,
-      current: previousShot && {lens: previousShot.lens, travel: previousShot.travel,
+      current: previousShot && {roomId: initialRoom?.roomId, lens: previousShot.lens, travel: previousShot.travel,
         sensorWidthMm: previousShot.sensorWidthMm, cameraHeight: previousShot.cameraHeight, rigRadius: previousShot.rigRadius,
         durationSeconds: previousShot.durationSeconds,
         moveKind: previousShot.moveKind, keepMark: previousShot.keepMark, requireSightlines: previousShot.requireSightlines},
@@ -969,8 +969,15 @@ agentForm.addEventListener("submit", async event => {
           throw Error("The open setup changed during scouting.");
         return planCurrentShot(request);
       },
-      onEvidence: ({candidates, unverifiedLeads, recommended, queued}) => {
+      onEvidence: ({coverage, candidates, unverifiedLeads, recommended, queued}) => {
         agentEvidence.replaceChildren();
+        if (coverage.shortlistedScans || coverage.propertiesFound || candidates.length) {
+          const scope = coverage.shortlistedScans === null
+            ? coverage.propertiesFound + " distinct CoStar properties surfaced"
+            : coverage.shortlistedScans + " shortlisted scans in scope";
+          agentEvidence.append(element("p", scope + " · " + coverage.roomsEvaluated +
+            " distinct rooms evaluated · " + candidates.length + " setups tested"));
+        }
         if (candidates.length) {
           const list = element("ol", "");
           for (const candidate of candidates) {

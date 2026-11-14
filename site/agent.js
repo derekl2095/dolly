@@ -91,7 +91,11 @@ export async function runAgent(brief, {activity, apply, lockedLens = null, locke
       })),
     }));
     const ranked = candidateReports();
-    onEvidence({candidates: ranked, unverifiedLeads: actionableLeads, recommended: ranked.find(item =>
+    const evaluatedRooms = new Set(ranked.filter(item => item.model)
+      .map(item => key(item.model, item.room ?? null)));
+    const coverage = {propertiesFound: shortlist ? null : leads.size,
+      shortlistedScans: shortlist?.length ?? null, roomsEvaluated: evaluatedRooms.size};
+    onEvidence({coverage, candidates: ranked, unverifiedLeads: actionableLeads, recommended: ranked.find(item =>
       item.status === "qualifies")?.id, queued: proposal?.report.id});
   }
   const key = (model, room) => JSON.stringify([model, room]);
@@ -147,7 +151,7 @@ export async function runAgent(brief, {activity, apply, lockedLens = null, locke
         }
         const searchDescription = [query, params.get("city"), params.get("category"),
           args.importedOnly === true ? "imported room outlines" : "catalog properties"].filter(Boolean).join(" · ");
-        activity(`CoStar search “${searchDescription}” returned ${rows.length} candidates.`);
+        activity(`CoStar search “${searchDescription}” surfaced ${rows.length} of ${data.rows.length} returned properties.`);
         return {rows, mode: data.mode};
       }
       case "inspect_location": {
@@ -229,7 +233,7 @@ export async function runAgent(brief, {activity, apply, lockedLens = null, locke
         if (lockedLens !== null && lens !== lockedLens) throw Error("The lens is locked.");
         const result = revise({distance, focal: lens, cameraHeight, objective: args.objective, requireSightlines});
         const id = "shot-" + (candidates.size + 1);
-        const report = {id, model: currentModel, move: current.moveKind, requested: distance, lens, cameraHeight: result.setup?.cameraHeight ?? cameraHeight, travel: result.setup?.travel ?? null, outcome: result.reason,
+        const report = {id, model: currentModel, room: current.roomId, move: current.moveKind, requested: distance, lens, cameraHeight: result.setup?.cameraHeight ?? cameraHeight, travel: result.setup?.travel ?? null, outcome: result.reason,
           ceiling: result.ceiling, clearanceMargin: result.clearanceMargin, sightlinesSampled: result.sightlinesSampled};
         candidates.set(id, {room: null, setup: result.setup, report});
         activity("Checked the open room: " + result.reason);
