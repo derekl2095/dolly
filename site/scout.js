@@ -983,7 +983,7 @@ agentForm.addEventListener("submit", async event => {
           const list = element("ul", "");
           for (const lead of unverifiedLeads) {
             const entry = element("li", [lead.name, lead.city,
-              lead.models.length ? "Room outline needed" : "No linked scan"].filter(Boolean).join(" · "));
+              lead.models.length ? "Room outline not confirmed" : "No linked scan"].filter(Boolean).join(" · "));
             if (lead.evidence) entry.append(element("p", lead.evidence));
             for (const scan of lead.scans) {
               const open = element("button", "Inspect " + (scan.caption || scan.model));

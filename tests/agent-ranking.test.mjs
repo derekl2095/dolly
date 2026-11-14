@@ -227,3 +227,26 @@ test("explicit brief values can fill the lens and minimum travel controls", () =
     {lens: null, minimumTravel: null});
   assert.equal(briefSuggestions("A 35.5 mm lens").lens, null);
 });
+
+test("shortlist-only runs retain scans with missing room evidence", async () => {
+  let evidence;
+  const turns = [{tool_calls: ["Ready", "Missing"].map(model => ({
+    id: model,
+    function: {name: "inspect_location", arguments: JSON.stringify({model})},
+  }))}, {content: "One scan has a room."}];
+  await runAgent("Check my shortlist", {
+    shortlist: [
+      {modelId: "Ready", label: "Ready room", caption: "Tour"},
+      {modelId: "Missing", label: "Missing room", caption: "Showroom"},
+    ],
+    activity() {},
+    onEvidence(value) { evidence = value; },
+    async api(path) {
+      if (path === "/api/rooms?model=Ready") return [{id: "room"}];
+      if (path === "/api/rooms?model=Missing") return [];
+      assert.equal(path, "/api/agent-turn");
+      return turns.shift();
+    },
+  });
+  assert.deepEqual(evidence.unverifiedLeads.map(lead => lead.scans[0].model), ["Missing"]);
+});

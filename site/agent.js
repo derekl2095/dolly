@@ -54,7 +54,9 @@ export async function runAgent(brief, {activity, apply, lockedLens = null, locke
   if (shortlist && !shortlist.length) throw Error("Shortlist a scan before limiting the agent to the shortlist.");
   const scope = shortlist && new Set(shortlist.map(item => item.modelId));
   const seen = new Set(scope), rooms = new Map(), candidates = new Map();
-  const leads = new Map();
+  const leads = new Map((shortlist ?? []).map(({modelId, label, caption}) => [
+    modelId, {name: label || modelId, models: [[modelId, caption]]},
+  ]));
   const inspected = new Map();
   const importAttempts = new Set();
   const importErrors = new Map();
@@ -254,6 +256,7 @@ export async function runAgent(brief, {activity, apply, lockedLens = null, locke
     }
   }
 
+  publishEvidence();
   for (let round = 0; round < 8; round++) {
     const response = await api("/api/agent-turn", {
       method: "POST", headers: {"Content-Type": "application/json"},
