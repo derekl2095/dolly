@@ -62,7 +62,7 @@ test("agent opens a ranked candidate when authorized and the model skips selecti
   }
 });
 
-test("a brief searches the catalog and opens the exact setup checked by the room solver", async () => {
+test("a brief searches the catalog and offers the exact setup checked by the room solver", async () => {
   const room = {
     modelId: "Wide", roomId: "showroom", label: "Wide showroom", height: 3,
     outline: [[-3,-6],[3,-6],[3,6],[-3,6]], camera: [0,4], lookAt: [0,0],
@@ -73,13 +73,14 @@ test("a brief searches the catalog and opens the exact setup checked by the room
   const evaluate = model => call("evaluate_shot", {model, room: "showroom",
     lens: 35, slide: .7, move: "slide", requireSightlines: false}, "evaluate-" + model);
   let round = 0;
-  let opened;
+  let alternatives;
   let evidence;
   await runAgent("Houston office, 35 mm lateral slide", {
-    lockedLens: 35, allowApply: true, minimumTravel: .7,
+    lockedLens: 35, allowApply: false, minimumTravel: .7,
     catalogFilters: {city: "Houston", category: "office"}, activity() {},
     onEvidence(value) { evidence = value; },
-    apply(openedRoom, setup) { opened = {room: openedRoom, setup}; },
+    onAlternatives(value) { alternatives = value; },
+    apply() { assert.fail("Report-only must not open a shot automatically"); },
     async api(path, options) {
       const url = new URL(path, "http://localhost");
       if (url.pathname === "/api/locations") {
@@ -111,6 +112,8 @@ test("a brief searches the catalog and opens the exact setup checked by the room
       }
     },
   });
+  assert.equal(alternatives.length, 1);
+  const [opened] = alternatives;
   assert.equal(opened.room.modelId, "Wide");
   assert.ok(Math.abs(opened.setup.travel - .7) < 1e-9);
   assert.equal(opened.setup.lens, 35);

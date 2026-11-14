@@ -31,7 +31,7 @@ async function request(path, options) {
   return data;
 }
 
-export async function runAgent(brief, {activity, apply, lockedLens = null, lockedMove = null, allowApply, current, revise, lockedRoom, requireSightlines = false, minimumTravel = 0, targetTravel = null, shortlist = null, currentModel, catalogFilters = {}, onEvidence = () => {}, allowImport = false, api = request}) {
+export async function runAgent(brief, {activity, apply, lockedLens = null, lockedMove = null, allowApply, current, revise, lockedRoom, requireSightlines = false, minimumTravel = 0, targetTravel = null, shortlist = null, currentModel, catalogFilters = {}, onEvidence = () => {}, onAlternatives = () => {}, allowImport = false, api = request}) {
   if (lockedMove !== null && !["slide", "push", "pull", "static"].includes(lockedMove))
     throw Error("Unsupported camera move lock.");
   if (targetTravel !== null && (!Number.isFinite(targetTravel) || targetTravel < minimumTravel || targetTravel > 4))
@@ -260,6 +260,11 @@ export async function runAgent(brief, {activity, apply, lockedLens = null, locke
         publishEvidence();
         activity(`Opened ${proposal.report.id} in the editor${automatic ? " as the top technical match" : ""}.`);
       }
+      onAlternatives(candidateReports().flatMap(report => {
+        const item = candidates.get(report.id);
+        return report.status === "qualifies" && item.room && item !== proposal
+          ? [{id: report.id, room: item.room, setup: item.setup}] : [];
+      }));
       const summary = response.content || "The investigation finished.";
       return automatic && proposal ? summary + ` Opened ${proposal.report.id}, the top qualifying technical match.` : summary;
     }

@@ -942,6 +942,7 @@ agentForm.addEventListener("submit", async event => {
             const {id, label, model, status, outcome, unmet, travel, requested,
               clearanceMargin, framingMargin, sightlinesSampled} = candidate;
             const entry = element("li", "");
+            entry.dataset.candidate = id;
             entry.append(element("strong", [label || model || id,
               id === recommended ? "Top technical match" : status,
               id === queued ? "Selected proposal" : ""].filter(Boolean).join(" · ")));
@@ -974,6 +975,28 @@ agentForm.addEventListener("submit", async event => {
             list.append(entry);
           }
           agentEvidence.append(element("h3", "Leads needing room evidence"), list);
+        }
+      },
+      onAlternatives: alternatives => {
+        for (const {id, room, setup} of alternatives) {
+          const entry = agentEvidence.querySelector('[data-candidate="' + id + '"]');
+          if (!entry) continue;
+          const open = element("button", "Open checked setup");
+          open.type = "button";
+          open.addEventListener("click", async () => {
+            if (projectLocked) return;
+            open.disabled = true;
+            const opening = inspectRoom({name: room.label || room.modelId}, room.modelId, room.roomId, setup);
+            const request = roomRequest;
+            try {
+              const opened = await opening;
+              if (request === roomRequest && !request.signal.aborted)
+                agentResult.textContent = opened ? "Opened " + id + " for review." : "Could not open " + id + ".";
+            } finally {
+              open.disabled = false;
+            }
+          });
+          entry.append(open);
         }
       },
       activity: text => agentActivity.append(element("li", text)),
