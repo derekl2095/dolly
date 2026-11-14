@@ -555,6 +555,7 @@ comparison.addEventListener("submit", async event => {
 
 const agentForm = document.querySelector("#agent-form");
 const agentResult = document.querySelector("#agent-result");
+const agentEvidence = document.querySelector("#agent-evidence");
 const agentActivity = document.querySelector("#agent-activity");
 const projectForm = document.querySelector("#project-form");
 const projectList = document.querySelector("#project-list");
@@ -676,6 +677,7 @@ document.querySelector("#new-project").addEventListener("click", () => {
   undoAgent.hidden = true;
   setAgentSettings();
   renderHistory();
+  agentEvidence.replaceChildren();
   agentActivity.replaceChildren();
   agentResult.textContent = "";
   form.reset();
@@ -705,6 +707,7 @@ async function openSavedProject(id) {
     results.replaceChildren();
     status.textContent = "";
     if (project.query?.trim() || project.filters?.city || project.filters?.category || project.filters?.linked || project.filters?.imported) form.requestSubmit();
+    agentEvidence.replaceChildren();
     agentActivity.replaceChildren();
     agentResult.textContent = "";
     revisionHistory = project.revisions || [];
@@ -824,6 +827,7 @@ agentForm.addEventListener("submit", async event => {
   const previousShot = currentShot();
   const initialShot = JSON.stringify(previousShot);
   button.disabled = true;
+  agentEvidence.replaceChildren();
   agentActivity.replaceChildren();
   agentResult.textContent = "Investigating the shot…";
   try {
@@ -851,6 +855,22 @@ agentForm.addEventListener("submit", async event => {
         if (initialRoom !== selectedRoom || initialShot !== JSON.stringify(currentShot()))
           throw Error("The open setup changed during scouting.");
         return planCurrentShot(request);
+      },
+      onEvidence: ({candidates, unverifiedLeads, queued}) => {
+        agentEvidence.replaceChildren();
+        for (const [heading, entries] of [
+          ["Tested setups", candidates.map(candidate =>
+            [candidate.id, candidate.model, candidate.status, candidate.outcome,
+              candidate.id === queued ? "Selected proposal" : ""].filter(Boolean).join(" · "))],
+          ["Leads needing room evidence", unverifiedLeads.map(lead =>
+            [lead.name, lead.city, lead.models.length ? "Room outline needed" : "No linked scan"]
+              .filter(Boolean).join(" · "))],
+        ]) {
+          if (!entries.length) continue;
+          const list = element("ul", "");
+          list.append(...entries.map(entry => element("li", entry)));
+          agentEvidence.append(element("h3", heading), list);
+        }
       },
       activity: text => agentActivity.append(element("li", text)),
       apply: async (room, setup) => {
