@@ -1,0 +1,237 @@
+/* Presentation layer. Existing visibility comes from the application's hidden states. */
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Instrument+Serif:ital@0;1&display=swap');
+
+:root {
+  --ink: #f5eee3;
+  --muted: #c8bfb2;
+  --base: #161511;
+  --panel: #201e19;
+  --field: #292620;
+  --line: #524b40;
+  --control-line: #85796a;
+  --accent: #eec491;
+  --accent-hover: #ffdbaf;
+  --accent-ink: #251b10;
+  --display: "Instrument Serif", Georgia, serif;
+  background: var(--base);
+  color: var(--ink);
+  font-family: "DM Sans", system-ui, sans-serif;
+  line-height: 1.55;
+}
+
+body { min-width: 280px; }
+main {
+  box-sizing: border-box;
+  max-width: 1500px;
+  padding: 0 clamp(16px, 4vw, 64px) clamp(40px, 7vw, 100px);
+}
+
+h1 {
+  display: flex;
+  align-items: flex-end;
+  min-height: clamp(230px, 38vw, 490px);
+  box-sizing: border-box;
+  margin: 0 0 20px;
+  padding: clamp(22px, 5vw, 76px);
+  background: linear-gradient(0deg, #12100fee, #12100f26 76%),
+    url("scout-set.jpg") center 49% / cover no-repeat, #292620;
+  border-radius: 0 0 16px 16px;
+  font: 400 clamp(54px, 10vw, 148px)/.91 var(--display);
+  letter-spacing: -.035em;
+  color: #fff4e5;
+}
+
+main:has(#plan:not([hidden])) h1 {
+  min-height: 0;
+  margin-bottom: 16px;
+  padding: 24px 0 12px;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  border-radius: 0;
+  background: none;
+  font-size: clamp(40px, 5vw, 68px);
+}
+
+h2 { font: 400 clamp(32px, 4vw, 56px)/1.03 var(--display); }
+h3 { font-size: 1.08rem; line-height: 1.3; }
+p, li { overflow-wrap: break-word; }
+article, aside, #projects, #agent-panel, #compare, #shortlist {
+  border: 1px solid var(--line);
+  background: var(--panel);
+  border-radius: 12px;
+  padding: clamp(14px, 2.1vw, 24px);
+  box-sizing: border-box;
+  min-width: 0;
+}
+
+#projects, #agent-panel, #compare, #shortlist { padding-block: 0; }
+summary { cursor: pointer; }
+#projects summary, #agent-panel summary, #compare summary, #shortlist summary {
+  padding: 13px 2px;
+  color: var(--ink);
+  font-weight: 600;
+}
+#projects[open], #agent-panel[open], #compare[open], #shortlist[open] { padding-bottom: 16px; }
+#projects[open] > summary, #agent-panel[open] > summary, #compare[open] > summary {
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 14px;
+}
+summary:hover, #projects summary:hover, #agent-panel summary:hover, #compare summary:hover {
+  color: var(--accent);
+}
+details > summary::marker { color: var(--accent); }
+
+form { align-items: end; flex-wrap: wrap; gap: 12px; }
+label { min-width: 0; }
+form label:has(select, input:not([type="checkbox"], [type="range"])) {
+  display: grid;
+  align-content: end;
+  gap: 5px;
+}
+label:has(input[type="checkbox"]) {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+}
+input[type="checkbox"] { width: 17px; height: 17px; flex: none; }
+input[type="checkbox"], input[type="range"] { accent-color: var(--accent); }
+input:not([type="checkbox"], [type="range"]), select, button {
+  min-height: 42px;
+  box-sizing: border-box;
+  border: 1px solid var(--control-line);
+  border-radius: 7px;
+  padding: 8px 11px;
+}
+input:not([type="checkbox"], [type="range"]), select {
+  color: var(--ink);
+  background: var(--field);
+  max-width: 100%;
+}
+input::placeholder { color: var(--muted); }
+input[type="file"] { width: 100%; }
+input::file-selector-button {
+  font: inherit;
+  margin-right: 8px;
+  border: 1px solid var(--control-line);
+  border-radius: 4px;
+  background: var(--panel);
+  color: var(--ink);
+  cursor: pointer;
+}
+button {
+  background: var(--field);
+  color: var(--ink);
+  font-weight: 600;
+  line-height: 1.25;
+}
+button:hover:not(:disabled) { background: #3a3329; border-color: var(--accent); }
+#scout-search button, #investigate-shot, #compare-form button, #project-form button:first-of-type,
+#play, #alignment button:last-child, #direction button {
+  background: var(--accent);
+  color: var(--accent-ink);
+  border-color: transparent;
+}
+#scout-search button:hover, #investigate-shot:hover:not(:disabled),
+#compare-form button:hover, #play:hover, #alignment button:last-child:hover {
+  background: var(--accent-hover);
+}
+button:disabled { cursor: default; opacity: .64; }
+button[aria-pressed="true"], #mark-obstacle[aria-pressed="true"] {
+  color: var(--accent-ink);
+  background: var(--accent);
+}
+a { color: var(--accent); text-underline-offset: .18em; }
+:focus-visible {
+  outline: 2px solid var(--accent-hover);
+  outline-offset: 3px;
+}
+
+#scout-search {
+  display: grid;
+  grid-template-columns: minmax(180px, 2fr) minmax(135px, 1fr) minmax(135px, 1fr);
+  align-items: end;
+  gap: 12px;
+  padding: clamp(14px, 2.2vw, 28px);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel);
+}
+#scout-search > input { width: 100%; grid-column: 1; grid-row: 1; }
+#scout-search > button { grid-column: 3; grid-row: 2; justify-self: end; }
+#scout-search > label:has(input[type="checkbox"]) { grid-column: 1 / -1; min-height: 24px; }
+#scout-search > label:has(input[name="linked"]) { grid-column: 1; }
+#scout-search > label:has(input[name="imported"]) { grid-column: 2; }
+#agent-form > label:first-child { flex: 1 1 100%; }
+#agent-form > p, #brief-review { flex-basis: 100%; }
+
+#workspace.layout { grid-template-columns: minmax(220px, 1fr) minmax(0, 2.7fr); gap: 16px; }
+#workspace.layout:has(#results:empty) { grid-template-columns: minmax(0, 1fr); }
+#workspace > aside { grid-column: -2 / -1; grid-row: 1 / span 3; }
+#workspace > :is(#shortlist, #results, #more-locations) { grid-column: 1; }
+#workspace:has(#results:empty) > aside { grid-row: auto; }
+#results { overscroll-behavior: contain; }
+#results article { padding: 14px; border-radius: 9px; }
+#results article p, #room-status, #status, #capture summary, #plan-tools p {
+  color: var(--muted);
+}
+#results article button { margin-right: 5px; }
+#agent-evidence article, #compare-results article { background: #26231d; }
+#agent-activity, #project-history ol, #shortlist ul { padding-inline-start: 24px; }
+#agent-activity li, #project-history li, #shortlist li { padding-block: 4px; }
+#project-list { margin-block: 5px; }
+
+#room-picker:not([hidden]), #upload-mesh:not([hidden]) {
+  display: inline-grid;
+  gap: 5px;
+  margin-bottom: 12px;
+}
+#shot-grid { grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); margin-top: 8px; }
+#viewport, #plan { border-radius: 8px; }
+#capture { border-top: 1px solid var(--line); padding-top: 12px; }
+#camera-hud { font-variant-numeric: tabular-nums; }
+#transport:not([hidden]) {
+  gap: 10px 14px;
+  padding: 12px;
+  background: var(--base);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+}
+#transport label { min-height: 38px; flex-wrap: wrap; }
+#transport output { color: var(--accent); font-variant-numeric: tabular-nums; }
+#transport input[type="range"] { min-height: 26px; }
+#alignment, #direction, #sightline-actions, #plan-tools {
+  margin-block: 12px;
+}
+#direction > input { flex: 1 1 160px; }
+#clearance, #ceiling, #framing, #sightline, #render-status, #alignment-status, #revision {
+  font-size: .925rem;
+}
+#clearance[data-result="pass"] { color: #ace0bd; }
+#clearance[data-result="fail"] { color: #ffb1a6; }
+
+@media (max-width: 940px) {
+  #scout-search { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  #scout-search > input { grid-column: 1 / -1; }
+  #scout-search > button { grid-column: 1 / -1; grid-row: auto; justify-self: stretch; }
+  #scout-search > label:has(input[name="linked"], input[name="imported"]) { grid-column: 1 / -1; }
+  #workspace.layout, #workspace.layout:has(#results:empty) { grid-template-columns: minmax(0, 1fr); }
+  #workspace > aside { grid-row: auto; }
+  #results { max-height: none; }
+}
+@media (max-width: 650px) {
+  #shot-grid { grid-template-columns: minmax(0, 1fr); }
+  #transport label:has(input[type="range"]) { flex: 1 1 160px; }
+  #transport label input[type="range"] { flex: 1 1 76px; }
+  #project-form > label { flex: 1 1 100%; }
+  h1 { background-position: 57% center; }
+}
+@media (max-width: 360px) {
+  #scout-search { grid-template-columns: minmax(0, 1fr); }
+}
+@media (prefers-reduced-motion: no-preference) {
+  button { transition: background-color .16s ease, border-color .16s ease; }
+}
+
+/* Long scan names should truncate within the native selector on small screens. */
+#room-picker, #upload-mesh { max-width: 100%; grid-template-columns: minmax(0, 1fr); }
