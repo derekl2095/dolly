@@ -3,7 +3,7 @@ import {parseProjectArchive, projectArchiveMaxBytes, readProjects, writeProject}
 import {loadObstacles, outlineMeasurements, roomKey} from "./room-state.js";
 import {briefSuggestions, runAgent} from "./agent.js?v=agent-capture";
 import {compareCapturedRooms} from "./compare.js";
-import {openMesh, closeMesh, currentShot, planCurrentShot, applyCurrentShot} from "./mesh.js?v=merged-scout";
+import {openMesh, closeMesh, currentShot, planCurrentShot, applyCurrentShot} from "./mesh.js?v=window-corner-marking";
 import {addMapLocations, resetLocationMap} from "./location-map.js?v=9";
 
 const form = document.querySelector("#scout-search");
@@ -320,7 +320,7 @@ function card(row, readiness = {}) {
       if (scan.alignedRoomCount) status = scan.alignedRoomCount + " aligned scan room(s)";
       else if (scan.meshAvailable) status = "Mesh needs alignment review";
       else if (scan.roomCount) status = "Room outline only";
-      else status = "Room import needed";
+      else status = "Room outline unverified";
     }
     scans.add(new Option((caption?.trim() || `Scan ${index + 1}`) + " · " + status, id));
   }
@@ -675,7 +675,10 @@ async function loadLocationPage(filters) {
     moreLocations.hidden = !nextLocationPage;
     const count = results.children.length;
     const coverage = mode === "addresses" ? " · CoStar addresses and scan links only" : "";
-    status.textContent = (count ? count + " property matches shown" : "No matching properties.") + coverage;
+    const noMatches = filters.get("imported") === "1"
+      ? "No matches with a confirmed room outline on this Mac. Clear the outline filter to include unverified scans."
+      : "No matching properties.";
+    status.textContent = (count ? count + " property matches shown" : noMatches) + coverage;
   } catch (error) {
     if (!request.signal.aborted) status.textContent = error.message;
   } finally {

@@ -342,8 +342,14 @@ class Handler(SimpleHTTPRequestHandler):
         except (OSError, ValueError, TypeError, KeyError):
             return self.respond(422, {"error": "The scan could not be imported. Check its availability and room data."})
         if not imported and not self.server.rooms(model):
-            return self.respond(422, {"error": "This scan has no importable closed room outlines.",
-                                      "skipped": len(skipped)})
+            record = (result.get("data") or {}).get("model") or {}
+            floors = record.get("floors") or []
+            if floors and not any(floor.get("edges") for floor in floors):
+                message = ("Matterport returned no floor-plan edges for this scan. "
+                           "The app cannot create a room outline from this data.")
+            else:
+                message = "Matterport returned room geometry, but none of the room boundaries formed a usable closed outline."
+            return self.respond(422, {"error": message, "skipped": len(skipped)})
         return self.respond(200, {"imported": len(imported), "skipped": len(skipped)})
 
     def import_measured_room(self, payload):

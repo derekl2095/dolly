@@ -43,6 +43,8 @@ class CatalogTests(unittest.TestCase):
             self.assertEqual(len(search(db, "ceilings", category="apartment")), 1)
             self.assertEqual(len(search_page(db, linked_only=True)["results"]), 1)
             self.assertEqual(search_page(db, imported_models=set())["results"], [])
+            filtered = search_page(db, imported_models={"ScanA"})
+            self.assertEqual([row["models"] for row in filtered["results"]], [{"ScanA": "Loft"}])
 
 
 class CaptureTests(unittest.TestCase):

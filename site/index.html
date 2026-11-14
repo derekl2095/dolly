@@ -99,7 +99,7 @@ select {max-width:100%} canvas {width:100%;display:block;margin-top:12px;backgro
 <label>City <select name="city"><option value="">Any city</option><option>Houston</option><option>Los Angeles</option></select></label>
 <label>Property type <select name="category"><option value="">Any type</option><option value="office">Office</option><option value="industrial warehouse">Industrial</option><option value="retail">Retail</option><option value="flex">Flex</option><option value="hotel hospitality">Hotel</option><option value="apartment multifamily">Apartment</option><option value="land">Land</option></select></label>
 <label><input name="linked" type="checkbox" value="1"> Linked Matterport scans only</label>
-<label><input name="imported" type="checkbox" value="1"> Imported room outlines only</label>
+<label><input name="imported" type="checkbox" value="1"> Confirmed closed room outlines only</label>
 <button>Search CoStar</button></form>
 <p id="status" role="status"></p>
 </div>
@@ -244,12 +244,18 @@ select {max-width:100%} canvas {width:100%;display:block;margin-top:12px;backgro
 <label>Time zone <input name="timeZone" placeholder="America/Chicago" required></label>
 <p id="daylight-location-source"></p>
 <label>Compass bearing of the plan’s +Z axis (degrees clockwise from true north) <input name="heading" type="number" min="0" max="360" step="any" required></label>
-<label><input type="checkbox" name="pick"> Pick four window corners in perimeter order on the scan</label>
+<label><input type="checkbox" name="pick"> Mark a window by clicking four corners around the pane</label>
 <button type="button" id="detect-windows">Suggest windows</button>
 <ul id="window-candidates"></ul>
+<label><input type="checkbox" name="showWindows"> Show marked windows in gold (detected candidates are cyan)</label>
+<ul id="marked-windows"></ul>
 <label>Window measurements <textarea name="windows" rows="6" required></textarea></label>
 <button type="submit">Save daylight calibration</button>
 <label>Study date <input name="date" type="date" required></label>
+<label>Room appearance <select name="appearance" disabled>
+<option value="photo">Photographed</option>
+<option value="relit">Relit</option>
+</select></label>
 <label><input name="show" type="checkbox"> Show simulated sunlight</label>
 <label>Time <input type="range" min="0" max="96" step="1" value="48"></label>
 <p role="status"></p>
@@ -262,4 +268,4 @@ select {max-width:100%} canvas {width:100%;display:block;margin-top:12px;backgro
 </div>
 </main>
 <script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js","three-mesh-bvh":"https://cdn.jsdelivr.net/npm/three-mesh-bvh@0.8.3/build/index.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"}}</script>
-<script type="module" src="scout.js?v=merged-scout"></script></body></html>
+<script type="module" src="scout.js?v=window-corner-marking"></script></body></html>

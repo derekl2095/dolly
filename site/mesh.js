@@ -1,4 +1,4 @@
-import {mountDaylight} from "./daylight.js?v=sun-preview";
+import {mountDaylight} from "./daylight.js?v=window-corner-marking";
 import {alignMesh, sightlineCheck} from "./sightlines.js?v=5";
 import {actorMarks, checkCameraHeight, loadShot, roomKey, shotSettings} from "./room-state.js";
 import {cameraMoveAxis, checkFraming, checkRigClearance, easedPathFraction, editorShotState, findSlide, interpretDirection, pathFromEndpoints, timeFractionAtPath, tracePath} from "./path.js?v=5";
@@ -59,6 +59,7 @@ export function closeMesh() {
   sightlineActions.hidden = true;
   revision.textContent = "";
   document.querySelector("#clearance").textContent = "";
+  document.querySelector("#ceiling").textContent = "";
   document.querySelector("#framing").textContent = "";
 }
 
@@ -208,7 +209,8 @@ function mount(THREE, room, mesh, textures, release, captured = false) {
     torso.visible = head.visible = Boolean(point);
     marks.add(torso, head);
   }
-  scene.add(marks, new THREE.HemisphereLight(0xffffff, 0xb7a28f, 2.3));
+  const fill = new THREE.HemisphereLight(0xffffff, 0xb7a28f, 2.3);
+  scene.add(marks, fill);
   showMarks.checked = false;
   let aligned = captured && room.matterpakAlignmentVerified === true;
   checkScan.disabled = !aligned;
@@ -428,7 +430,7 @@ function mount(THREE, room, mesh, textures, release, captured = false) {
     else stop();
   }
 
-  const refreshDaylight = captured ? mountDaylight({THREE, room, mesh, scene, renderer, isAligned: () => aligned, canvas: renderer.domElement,
+  const refreshDaylight = captured ? mountDaylight({THREE, room, mesh, scene, renderer, fill, marks, isAligned: () => aligned, canvas: renderer.domElement,
     camera: () => reviewing ? overhead : camera, signal: controls.signal, actors: () => actors, render,
     showFloorPatch: triangles => plan.dispatchEvent(new CustomEvent("sunpatch", {detail: triangles}))}) : null;
   const options = {signal: controls.signal};

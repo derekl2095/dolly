@@ -1,4 +1,5 @@
-import {scanWindowCandidates} from "./window-detection.js";
+import {createRelight} from "./relight.js?v=dark-panes";
+import {scanWindowCandidates} from "./window-detection.js?v=window-angles";
 async function request(path, options) {
   const response = await fetch(path, options);
   const data = await response.json();
@@ -22,6 +23,7 @@ export function interiorStudy(THREE, mesh, profile, frame, actors) {
   const triangles = [];
   const floorTriangles = [];
   const exposure = actors.map(() => ({lit: false, conditional: false}));
+  const apertures = new Set();
   for (const verdict of frame.windows.filter(viable)) {
     const {corners} = profile.windows.find(window => window.id === verdict.id);
     const [a, b, c, d] = corners.map(point => new THREE.Vector3(...point));
@@ -34,6 +36,9 @@ export function interiorStudy(THREE, mesh, profile, frame, actors) {
         exposure[index].lit = true;
       }
     });
+    const key = JSON.stringify(corners);
+    if (apertures.has(key)) continue;
+    apertures.add(key);
     // Start just inside the annotated window plane to skip captured glazing there.
     const size = 10;
     const hit = (u, v) => {
@@ -60,7 +65,32 @@ export function interiorStudy(THREE, mesh, profile, frame, actors) {
   return {triangles, floorTriangles, exposure};
 }
 
-export function mountDaylight({THREE, room, mesh, scene, renderer, isAligned, canvas, camera, signal, actors, render, showFloorPatch}) {
+export function findWindowWall(THREE, outline, ray) {
+  const winding = Math.sign(outline.reduce((area, [x, z], i) => {
+    const [u, v] = outline[(i + 1) % outline.length];
+    return area + x * v - z * u;
+  }, 0));
+  let closest;
+  for (const [i, [x, z]] of outline.entries()) {
+    const [u, v] = outline[(i + 1) % outline.length];
+    const edge = new THREE.Vector3(u - x, 0, v - z);
+    const length = edge.length();
+    if (length < .01) continue;
+    const outward = new THREE.Vector3(edge.z, 0, -edge.x).multiplyScalar(winding / length);
+    if (outward.dot(ray.direction) <= .001) continue;
+    const start = new THREE.Vector3(x, 0, z);
+    const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(outward, start);
+    const point = ray.intersectPlane(plane, new THREE.Vector3());
+    if (!point) continue;
+    const offset = point.clone().sub(start).dot(edge) / length;
+    if (offset < -.04 || offset > length + .04) continue;
+    const distance = point.distanceTo(ray.origin);
+    if (!closest || distance < closest.distance) closest = {plane, outward, distance};
+  }
+  return closest;
+}
+
+export function mountDaylight({THREE, room, mesh, scene, renderer, fill, marks, isAligned, canvas, camera, signal, actors, render, showFloorPatch}) {
   const panel = document.querySelector("#daylight");
   const frames = new Map();
   let acceleration;
@@ -70,6 +100,8 @@ export function mountDaylight({THREE, room, mesh, scene, renderer, isAligned, ca
   const status = panel.querySelector('[role="status"]');
   const clock = panel.querySelector('input[type="range"]');
   const show = panel.querySelector('[name="show"]');
+  const appearance = form.elements.appearance;
+  const relight = createRelight(THREE, mesh, fill, scene, renderer, marks);
   const pick = panel.querySelector('[name="pick"]');
   const session = {model: room.modelId, room: room.roomId ?? null};
   const params = new URLSearchParams({model: session.model});
@@ -84,6 +116,7 @@ export function mountDaylight({THREE, room, mesh, scene, renderer, isAligned, ca
   let saved;
   let study;
   let staged = [];
+  let markingWall;
   let pending;
   let ready = false;
   const listen = {signal};
@@ -92,7 +125,7 @@ export function mountDaylight({THREE, room, mesh, scene, renderer, isAligned, ca
   panel.querySelector("#daylight-location-source").textContent = "";
   form.reset();
   const save = form.querySelector('button[type="submit"]');
-  save.disabled = show.disabled = clock.disabled = true;
+  save.disabled = appearance.disabled = show.disabled = clock.disabled = true;
 
   form.elements.windows.value = "[]";
   clock.value = "48";
@@ -100,19 +133,115 @@ export function mountDaylight({THREE, room, mesh, scene, renderer, isAligned, ca
   const detect = panel.querySelector("#detect-windows");
   const suggestions = panel.querySelector("#window-candidates");
   const previews = new THREE.Group();
-  scene.add(previews);
+  const measured = new THREE.Group();
+  const markers = new THREE.Group();
+  scene.add(markers);
+  const showBoxes = form.elements.showWindows;
+  const markedWindows = panel.querySelector("#marked-windows");
+  markedWindows.replaceChildren();
+  scene.add(previews, measured);
   suggestions.replaceChildren();
   detect.disabled = pick.disabled = true;
   let generation = 0;
 
-  function clearSuggestions() {
-    for (const outline of [...previews.children]) {
-      outline.geometry.dispose();
-      outline.material.dispose();
-      previews.remove(outline);
+  let lineModules;
+  function windowLines() {
+    return lineModules ??= Promise.all([
+      import("three/addons/lines/Line2.js"),
+      import("three/addons/lines/LineGeometry.js"),
+      import("three/addons/lines/LineMaterial.js"),
+    ]);
+  }
+
+  function clearBoxes(group) {
+    for (const box of [...group.children]) {
+      box.traverse(object => {
+        object.geometry?.dispose();
+        object.material?.dispose();
+      });
+      group.remove(box);
     }
+  }
+
+  function clearSuggestions() {
+    clearBoxes(previews);
     suggestions.replaceChildren();
   }
+
+  function drawBox(group, corners, color, [{Line2}, {LineGeometry}, {LineMaterial}]) {
+    const box = new THREE.Group();
+    const path = [...corners, corners[0]].flat();
+    for (const [stroke, width, order] of [[0x101318, 7, 12], [color, 3, 13]]) {
+      const geometry = new LineGeometry().setPositions(path);
+      const line = new Line2(geometry, new LineMaterial({
+        color: stroke, linewidth: width, depthTest: false, depthWrite: false, toneMapped: false,
+      }));
+      line.onBeforeRender = renderer => renderer.getSize(line.material.resolution);
+      line.renderOrder = order;
+      box.add(line);
+    }
+    const cornerGeometry = new THREE.BufferGeometry();
+    cornerGeometry.setAttribute("position", new THREE.Float32BufferAttribute(corners.flat(), 3));
+    const dots = new THREE.Points(cornerGeometry, new THREE.PointsMaterial({
+      color, size: 8, sizeAttenuation: false, depthTest: false, depthWrite: false, toneMapped: false,
+    }));
+    dots.renderOrder = 14;
+    box.add(dots);
+    group.add(box);
+    return box;
+  }
+
+  function listMarked(windows) {
+    markedWindows.replaceChildren();
+    for (const window of windows) {
+      if (typeof window?.id !== "string") continue;
+      const row = document.createElement("li");
+      row.textContent = window.id + " · " + (window.source || "Marked window") + " ";
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.textContent = "Remove " + window.id;
+      remove.addEventListener("click", () => {
+        try {
+          const current = JSON.parse(form.elements.windows.value);
+          form.elements.windows.value = JSON.stringify(current.filter(item => item.id !== window.id), null, 2);
+          status.textContent = "Removed " + window.id + " from the draft. Save to update the sunlight study.";
+          void showMeasured();
+        } catch {
+          status.textContent = "Fix the window measurements before removing a window.";
+        }
+      }, listen);
+      row.append(remove);
+      markedWindows.append(row);
+    }
+  }
+
+  async function showMeasured() {
+    clearBoxes(measured);
+    try {
+      const windows = JSON.parse(form.elements.windows.value);
+      if (!Array.isArray(windows)) return;
+      listMarked(windows);
+      if (!showBoxes.checked) {
+        render();
+        return;
+      }
+      const modules = await windowLines();
+      if (signal.aborted || !showBoxes.checked) return;
+      clearBoxes(measured);
+      for (const window of windows) {
+        const corners = window?.corners;
+        if (Array.isArray(corners) && corners.length === 4 && corners.every(point =>
+          Array.isArray(point) && point.length === 3 && point.every(Number.isFinite)))
+          drawBox(measured, corners, 0xffce67, modules);
+      }
+      render();
+    } catch {
+      if (!signal.aborted) status.textContent = "Could not draw the marked windows. Check the window measurements.";
+    }
+  }
+
+  showBoxes.addEventListener("change", showMeasured, listen);
+  form.elements.windows.addEventListener("change", showMeasured, listen);
 
   detect.addEventListener("click", async () => {
     if (!isAligned()) {
@@ -127,20 +256,20 @@ export function mountDaylight({THREE, room, mesh, scene, renderer, isAligned, ca
       const data = await request("/api/window-candidates", {method: "POST",
         headers: {"Content-Type": "application/json"}, body: JSON.stringify(session), signal});
       if (signal.aborted || attempt !== generation) return;
-      const candidates = data.candidates.length ? data.candidates : scanWindowCandidates(THREE, room, mesh, renderer);
+      const candidates = data.candidates.length ? data.candidates : scanWindowCandidates(THREE, room, mesh, renderer, relight.photoMaterial);
+      const modules = candidates.length ? await windowLines() : null;
+      if (signal.aborted || attempt !== generation) return;
       candidates.forEach((candidate, index) => {
         const {corners, outward, source} = candidate;
-        const outline = new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(
-          corners.map(point => new THREE.Vector3(...point))),
-          new THREE.LineBasicMaterial({color: 0x72e2ff, depthTest: false}));
-        outline.renderOrder = 12;
-        previews.add(outline);
+        const outline = drawBox(previews, corners, 0x59e8ff, modules);
         const row = document.createElement("li");
         row.append(document.createTextNode("Window candidate " + (index+1) + " · " + source + " "));
         function remove() {
+          outline.traverse(object => {
+            object.geometry?.dispose();
+            object.material?.dispose();
+          });
           previews.remove(outline);
-          outline.geometry.dispose();
-          outline.material.dispose();
           row.remove();
           render();
         }
@@ -151,6 +280,8 @@ export function mountDaylight({THREE, room, mesh, scene, renderer, isAligned, ca
             while (windows.some(window => window.id === "window-" + id)) id++;
             windows.push({id: "window-" + id, corners, outward, source});
             form.elements.windows.value = JSON.stringify(windows, null, 2);
+            showBoxes.checked = true;
+            void showMeasured();
             status.textContent = "Candidate added. Confirm this is exterior glazing, adjust measurements if needed, then save.";
             remove();
           } catch {
@@ -166,7 +297,7 @@ export function mountDaylight({THREE, room, mesh, scene, renderer, isAligned, ca
         suggestions.append(row);
       });
       status.textContent = candidates.length ? "Review the outlined candidates against the scan."
-        : "No window candidates found. Pick four corners manually.";
+        : "No framed openings found. Clear or fully scanned glass may need four corners marked manually.";
       render();
     } catch (error) {
       if (!signal.aborted && attempt === generation) status.textContent = error.message;
@@ -175,23 +306,28 @@ export function mountDaylight({THREE, room, mesh, scene, renderer, isAligned, ca
     }
   }, listen);
 
+  const wantsStudy = () => show.checked || appearance.value === "relit";
+
   function update() {
-    if (!show.checked || !study?.frames?.length) {
+    const frame = wantsStudy() && study?.frames?.[Number(clock.value)];
+    const relit = appearance.value === "relit" && Boolean(frame);
+    relight.set(relit ? frame : null, saved?.profile);
+    show.disabled = !ready || relit;
+    if (!frame) {
       patch.visible = false;
       showFloorPatch([]);
       render();
       return;
     }
     const index = Number(clock.value);
-    const frame = study.frames[index];
-    if (!frame) return;
+
     if (!frames.has(index)) frames.set(index, interiorStudy(THREE, mesh, saved.profile, frame, study.actors));
     const {triangles, floorTriangles, exposure} = frames.get(index);
     showFloorPatch(floorTriangles);
     patch.geometry.dispose();
     patch.geometry = new THREE.BufferGeometry();
     patch.geometry.setAttribute("position", new THREE.Float32BufferAttribute(triangles, 3));
-    patch.visible = triangles.length !== 0;
+    patch.visible = !relit && triangles.length !== 0;
     const assumed = frame.windows.some(w => w.status === "exterior-unknown");
     status.textContent = frame.localTime + " · " + frame.windows.map(w => w.id + " " + w.reason).join(" · ") +
       (assumed ? " · assuming unobstructed sun" : "") +
@@ -208,6 +344,7 @@ export function mountDaylight({THREE, room, mesh, scene, renderer, isAligned, ca
     if (saved.profile) {
       for (const key of ["latitude", "longitude", "heading", "timeZone"]) form.elements[key].value = saved.profile[key];
       form.elements.windows.value = JSON.stringify(saved.profile.windows, null, 2);
+      void showMeasured();
     }
     const site = saved.locationDefaults;
     const defaults = [];
@@ -230,7 +367,7 @@ export function mountDaylight({THREE, room, mesh, scene, renderer, isAligned, ca
     }
     ready = saved.status === "ready";
     save.disabled = detect.disabled = pick.disabled = !saved.revision;
-    show.disabled = clock.disabled = !ready;
+    appearance.disabled = show.disabled = clock.disabled = !ready;
     const missing = [
       ...(["latitude", "longitude", "timeZone"].some(key => !form.elements[key].value) ? ["site coordinates and time zone"] : []),
       ...(!form.elements.heading.value ? ["true-north bearing"] : []),
@@ -249,7 +386,7 @@ export function mountDaylight({THREE, room, mesh, scene, renderer, isAligned, ca
     pending?.abort();
     const controller = new AbortController();
     pending = controller;
-    if (!panel.open || !show.checked || !ready) {
+    if ((!panel.open && appearance.value !== "relit") || !wantsStudy() || !ready) {
       study = null;
       update();
       return;
@@ -301,7 +438,7 @@ export function mountDaylight({THREE, room, mesh, scene, renderer, isAligned, ca
       saved = await request("/api/room-lighting", {method: "PUT", headers: {"Content-Type": "application/json"},
         body: JSON.stringify({...session, revision: saved?.revision, profile}), signal});
       ready = true;
-      show.disabled = clock.disabled = false;
+      appearance.disabled = show.disabled = clock.disabled = false;
       show.checked = true;
       help.textContent = "The overlay estimates direct sun over the photographed scan.";
       status.textContent = "Daylight calibration saved.";
@@ -319,29 +456,52 @@ export function mountDaylight({THREE, room, mesh, scene, renderer, isAligned, ca
       1 - (event.clientY - bounds.top) / bounds.height * 2);
     const ray = new THREE.Raycaster();
     ray.setFromCamera(ndc, camera());
-    const hit = ray.intersectObject(mesh, true)[0];
-    if (!hit) return;
-    staged.push(hit.point.toArray().map(value => Math.round(value * 10000) / 10000));
+    if (!markingWall) markingWall = findWindowWall(THREE, room.outline, ray.ray);
+    const point = markingWall && ray.ray.intersectPlane(markingWall.plane, new THREE.Vector3());
+    if (!point || point.y < -.05 || point.y > (room.height || 3.5) + .3) {
+      status.textContent = "Choose a corner on a visible room wall. Click the sill first.";
+      return;
+    }
+    staged.push(point.toArray().map(value => Math.round(value * 10000) / 10000));
+    const marker = new THREE.Points(new THREE.BufferGeometry().setFromPoints([point]),
+      new THREE.PointsMaterial({color: 0xffce67, size: 10, sizeAttenuation: false, depthTest: false}));
+    marker.renderOrder = 15;
+    markers.add(marker);
+    render();
     status.textContent = "Picked " + staged.length + " of 4 corners.";
     if (staged.length !== 4) return;
     pick.checked = false;
     const corners = staged;
-    staged = [];
+    const outward = markingWall.outward.toArray();
+    resetPicking();
     try {
       const windows = JSON.parse(form.elements.windows.value);
-      const [a, b, c] = corners.map(point => new THREE.Vector3(...point));
-      const normal = b.sub(a).cross(c.sub(a)).normalize();
       let id = 1;
       while (windows.some(window => window.id === "window-" + id)) id++;
-      windows.push({id: "window-" + id, corners, outward: normal.toArray(), source: "Operator marked on aligned MatterPak"});
+      windows.push({id: "window-" + id, corners, outward, source: "Operator marked on aligned room wall"});
       form.elements.windows.value = JSON.stringify(windows, null, 2);
-      status.textContent = "Confirm the outward normal in the window measurements. Reverse its signs if it points indoors.";
+      showBoxes.checked = true;
+      void showMeasured();
+      status.textContent = "Window added to the draft. Check the gold box and save when it matches the frame.";
     } catch {
       status.textContent = "Fix the window JSON before adding picked corners.";
     }
   }, listen);
-  pick.addEventListener("change", () => { staged = []; }, listen);
+  function resetPicking() {
+    staged = [];
+    markingWall = null;
+    clearBoxes(markers);
+  }
+  pick.addEventListener("change", () => {
+    resetPicking();
+    if (pick.checked) status.textContent = "Click four corners around one pane in order, starting at the sill.";
+    render();
+  }, listen);
   show.addEventListener("change", evaluate, listen);
+  appearance.addEventListener("change", () => {
+    if (study?.frames?.length) update();
+    else void evaluate();
+  }, listen);
   form.elements.date.addEventListener("change", evaluate, listen);
   panel.addEventListener("toggle", evaluate, listen);
   clock.addEventListener("input", () => {
@@ -356,9 +516,12 @@ export function mountDaylight({THREE, room, mesh, scene, renderer, isAligned, ca
     cancelAnimationFrame(scheduled);
     showFloorPatch([]);
     clearSuggestions();
+    clearBoxes(measured);
+    clearBoxes(markers);
     panel.hidden = true;
     patch.geometry.dispose();
     patch.material.dispose();
+    relight.dispose();
   }, {once: true});
   void load().then(evaluate).catch(error => { if (!signal.aborted) status.textContent = error.message; });
   return {
@@ -366,7 +529,7 @@ export function mountDaylight({THREE, room, mesh, scene, renderer, isAligned, ca
     reload() {
       generation++;
       clearSuggestions();
-      save.disabled = detect.disabled = pick.disabled = show.disabled = clock.disabled = true;
+      save.disabled = detect.disabled = pick.disabled = appearance.disabled = show.disabled = clock.disabled = true;
       ready = false;
       pending?.abort();
       study = null;

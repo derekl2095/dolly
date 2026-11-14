@@ -208,7 +208,13 @@ def _search_rows(database, brief, limit, offset, *, city, category, linked_only,
             category, models, {evidence} AS evidence
             FROM locations {where}
             ORDER BY {rank}property_id, rowid LIMIT ? OFFSET ?""", (*values, limit, offset))
-        return [{**dict(row), "models": json.loads(row["models"])} for row in rows]
+        results = []
+        for row in rows:
+            models = json.loads(row["models"])
+            if imported_models is not None:
+                models = {model: caption for model, caption in models.items() if model in imported_models}
+            results.append({**dict(row), "models": models})
+        return results
 
 
 def search(database, brief, limit=12, *, city="", category="", linked_only=False,
