@@ -1,3 +1,4 @@
+import {mountDaylight} from "./daylight.js";
 import {alignMesh, sightlineCheck} from "./sightlines.js";
 import {actorMarks, checkCameraHeight, loadShot, roomKey, shotSettings} from "./room-state.js";
 import {cameraMoveAxis, checkFraming, checkRigClearance, easedPathFraction, editorShotState, findSlide, interpretDirection, pathFromEndpoints, timeFractionAtPath} from "./path.js";
@@ -400,6 +401,8 @@ function mount(THREE, room, mesh, textures, release, captured = false) {
     else stop();
   }
 
+  const refreshDaylight = captured ? mountDaylight({THREE, room, mesh, scene, canvas: renderer.domElement,
+    camera: () => reviewing ? overhead : camera, signal: controls.signal, actors: () => actors, render}) : null;
   const options = {signal: controls.signal};
   alignmentView.addEventListener("click", () => {
     stop();
@@ -437,6 +440,7 @@ function mount(THREE, room, mesh, textures, release, captured = false) {
       if (!aligned) checkScan.checked = false;
       save();
       alignMesh(mesh, room);
+      refreshDaylight?.reload();
       checkedTravel = undefined;
       alignmentStatus.textContent = review.note;
       render();
@@ -539,6 +543,7 @@ function mount(THREE, room, mesh, textures, release, captured = false) {
     showMarks.checked = true;
     save();
     render();
+    void refreshDaylight?.evaluate();
     revision.textContent = wasPlaced ? (aimLocked ? "Actor mark moved. Manual aim kept." : "Actor mark moved and camera aim re-centered.")
       : actors.every(Boolean) ? "Both actor marks are set." : "Actor mark set. Place the other actor to check the two-shot.";
   }, options);

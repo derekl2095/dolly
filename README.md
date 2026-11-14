@@ -179,3 +179,26 @@ and `outline` containing boundary-ordered `[x, z]` pairs in the scan's axes.
 Optional `label` and `height` are supported. Use points measured from the
 actual room or a scaled plan. Place actor marks in the editor and review the
 alignment against the MatterPak before running scan sightline checks.
+
+## Direct sunlight study
+
+Open an aligned MatterPak room and expand **Direct sunlight**. Enter verified
+site coordinates, the IANA time zone and the true bearing of the room's +z
+axis. Pick four perimeter corners per window on the scan or enter measured
+corners in the window fields. Review the outward normal before saving. The
+date and time controls display a separate direct-sun overlay over photographed
+textures and report exposure at each actor's eye-height mark. The result
+assumes unobstructed exterior sun where no usable elevation data is available.
+
+An optional normalized Vexcel DSM can be placed alongside the daylight profile
+as `legacy-daylight-dsm.json` or `room-ROOM_ID-daylight-dsm.json`. Use
+`crs: "EPSG:4326"`, `units: "meters"`, a verified `datum`, `bounds` in
+west/south/east/north order, and north-to-south rows of pixel elevations in
+`heights`. Use null for missing cells. Each window needs a verified
+`exterior` center with longitude, latitude, elevationMeters, and matching
+datum. The estimate checks a center ray from 2 to 150 m outside the window.
+An obstruction beyond that distance is outside the study coverage.
+
+Run daylight backend tests with
+`python3 -m unittest discover -s tests -p test_daylight.py` and geometry checks
+with `node tests/check-daylight-geometry.mjs THREE_PACKAGE_DIR`.

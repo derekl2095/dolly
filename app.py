@@ -15,6 +15,8 @@ from pathlib import Path
 from urllib.error import URLError
 from urllib.parse import parse_qs, unquote, urlsplit
 
+import daylight
+
 from catalog import build, search_page, source_mode
 from fetch_matterpak import download_mesh, mesh_assets, stored_locally, unpack
 from import_room import DEFAULT_ASSETS, import_measured_room, import_rooms, read_model, valid_id
@@ -150,9 +152,82 @@ class Handler(SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(payload)
 
+    def room_lighting(self, data, save=False, evaluate=False):
+        model, room_id = data.get("model"), data.get("room")
+        if not isinstance(model, str) or not re.fullmatch(r"[A-Za-z0-9]{1,40}", model) or (
+                room_id is not None and not valid_id(room_id)):
+            return self.respond(400, {"error": "Invalid room reference."})
+        room = self.server.room(model, room_id)
+        if room is None or room.get("roomId") != room_id:
+            return self.respond(404, {"error": "Room not found."})
+        alignment = self.server.alignment_path(model, room_id)
+        path = alignment.with_name(alignment.stem + "-daylight.json")
+        try:
+            mesh = self.server.mesh_revision(model)
+            revision = None
+            if mesh and room.get("matterpakAlignmentVerified") is True:
+                revision = {"mesh": mesh, "floor": room.get("matterpakFloorHeight", 0),
+                            "up": room.get("matterpakUp"), "outline": room["outline"],
+                            # A string preserves nanoseconds across JSON and JavaScript.
+                            "alignment": str(alignment.stat().st_mtime_ns) if alignment.is_file() else None}
+                revision["mesh"] = [*mesh[:2], str(mesh[2])]
+            if save:
+                if revision is None or data.get("revision") != revision:
+                    return self.respond(409, {"error": "Reload the room and review mesh alignment before saving."})
+                calibrated = daylight.profile(data.get("profile"))
+                path.parent.mkdir(parents=True, exist_ok=True)
+                with tempfile.NamedTemporaryFile(mode="w", dir=path.parent, delete=False) as output:
+                    temporary = Path(output.name)
+                    try:
+                        json.dump({"revision": revision, "profile": calibrated}, output, allow_nan=False)
+                        output.close()
+                        temporary.replace(path)
+                    finally:
+                        temporary.unlink(missing_ok=True)
+                return self.respond(200, {"status": "ready", "revision": revision, "profile": calibrated})
+            saved = json.loads(path.read_text()) if path.is_file() else {}
+            calibrated = saved.get("profile")
+            status = ("missing" if calibrated is None else "ready"
+                      if revision is not None and saved.get("revision") == revision else "stale")
+            if not evaluate:
+                return self.respond(200, {"status": status, "revision": revision, "profile": calibrated})
+            if status != "ready":
+                return self.respond(200, {"status": "unknown", "reason": status + " daylight calibration", "frames": []})
+            actors = data.get("actors", [])
+            if not isinstance(actors, list) or len(actors) > 8:
+                raise ValueError("Supply up to eight actor samples.")
+            grid_path = path.with_name(path.stem + "-dsm.json")
+            try:
+                grid = json.loads(grid_path.read_text()) if grid_path.stat().st_size <= 16_000_000 else None
+            except (OSError, ValueError):
+                grid = None
+            frames = daylight.study(calibrated, daylight.instants(data, calibrated["timeZone"]), [daylight.point(a) for a in actors], grid)
+            return self.respond(200, {"status": "ready", "frames": frames})
+        except (ValueError, OverflowError) as error:
+            return self.respond(400, {"error": str(error)})
+        except OSError:
+            return self.respond(500, {"error": "Could not access local daylight data."})
+
+    def do_PUT(self):
+        if self.path != "/api/room-lighting":
+            return self.respond(404, {"error": "Unknown endpoint."})
+        origin = self.headers.get("Origin")
+        if origin and origin != f"http://{self.headers.get('Host')}":
+            return self.respond(403, {"error": "Open this action from the local app."})
+        try:
+            size = int(self.headers.get("Content-Length", "0"))
+            if not 0 < size <= 100_000 or self.headers.get_content_type() != "application/json":
+                raise ValueError
+            payload = json.loads(self.rfile.read(size))
+            if not isinstance(payload, dict):
+                raise ValueError
+        except ValueError:
+            return self.respond(400, {"error": "Invalid daylight profile request."})
+        return self.room_lighting(payload, save=True)
+
     def do_POST(self):
         path = urlsplit(self.path)
-        if path.path not in {"/api/upload-matterpak", "/api/agent-turn", "/api/import-room", "/api/import-measured-room", "/api/import-matterpak", "/api/room-alignment"}:
+        if path.path not in {"/api/upload-matterpak", "/api/daylight-study", "/api/agent-turn", "/api/import-room", "/api/import-measured-room", "/api/import-matterpak", "/api/room-alignment"}:
             return self.respond(404, {"error": "Unknown endpoint."})
         origin = self.headers.get("Origin")
         if origin and origin != f"http://{self.headers.get('Host')}":
@@ -169,6 +244,8 @@ class Handler(SimpleHTTPRequestHandler):
             payload = json.loads(self.rfile.read(size))
             if not isinstance(payload, dict):
                 raise ValueError
+            if path.path == "/api/daylight-study":
+                return self.room_lighting(payload, evaluate=True)
             if self.path == "/api/import-room":
                 return self.import_room(payload)
             if self.path == "/api/import-measured-room":
@@ -303,6 +380,8 @@ class Handler(SimpleHTTPRequestHandler):
     def do_GET(self):
         url = urlsplit(self.path)
         params = parse_qs(url.query)
+        if url.path == "/api/room-lighting":
+            return self.room_lighting({key: params.get(key, [None])[0] for key in ("model", "room")})
         if url.path == "/api/room-import-status":
             return self.respond(200, {"configured": matterport_configured()})
         if url.path == "/api/agent-status":

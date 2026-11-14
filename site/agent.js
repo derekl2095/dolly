@@ -8,6 +8,10 @@ const definitions = [
   ["import_capture_outline", "Fetch room geometry for a discovered Matterport scan when authorized.", {model: {type: "string"}}],
   ["get_room_evidence", "Read a room's imported dimensions and staging evidence.",
     {model: {type: "string"}, room: {type: ["string", "null"]}}],
+  ["study_daylight", "Check sun and exterior exposure for an inspected room. Actor aperture tests do not include interior occlusion.", {
+    model: {type: "string"}, room: {type: ["string", "null"]},
+    start: {type: "string"}, end: {type: "string"}, stepMinutes: {type: "integer"},
+  }],
   ["evaluate_shot", "Test a lens and camera move in an inspected room. Returns a candidate ID.",
     {model: {type: "string"}, room: {type: ["string", "null"]},
      lens: {type: "integer"}, slide: {type: "number"}, requireSightlines: {type: "boolean"}, move: {type: "string", enum: ["slide", "push", "pull", "static"]}}],
@@ -208,6 +212,24 @@ export async function runAgent(brief, {activity, apply, lockedLens = null, locke
           staging: room.staging || "provisional",
           meshAlignmentVerified: room.matterpakAlignmentVerified === true,
           alignmentEvidence: room.alignmentEvidence};
+      }
+      case "study_daylight": {
+        const room = rooms.get(key(args.model, args.room ?? null));
+        if (!room) throw Error("Read the room evidence first.");
+        const start = Date.parse(args.start);
+        const end = Date.parse(args.end);
+        if (!Number.isFinite(start) || !Number.isFinite(end) || end < start ||
+            !Number.isInteger(args.stepMinutes) || args.stepMinutes < 1 ||
+            (end - start) / (args.stepMinutes * 60000) >= 24)
+          throw Error("Use an offset timestamp range with at most 24 samples.");
+        const actors = actorMarks(room, loadShot(room)).filter(Boolean).map(([x, z]) => [x, 1.49, z]);
+        const result = await api("/api/daylight-study", {
+          method: "POST", headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({model: room.modelId, room: room.roomId ?? null, start: args.start,
+            end: args.end, stepMinutes: args.stepMinutes, actors}),
+        });
+        activity("Checked daylight evidence for " + (room.label || room.modelId) + ".");
+        return {...result, interiorOcclusion: "Use the editor to verify interior occlusion before claiming direct actor light."};
       }
       case "evaluate_shot": {
         const room = rooms.get(key(args.model, args.room ?? null));
