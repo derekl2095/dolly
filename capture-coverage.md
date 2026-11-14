@@ -54,10 +54,17 @@ embedded Vexcel XMP identifies collection `us-tx-houston-2026`, image
 and capture timestamp `2025-12-31 17:37:49.0`. The collection-wide last
 capture date differs from this image's capture date.
 
-The DSM coverage reply includes a Houston 2026 collection but omits its
-layer field. No elevation tiles were downloaded in the first run.
-Exterior visual review is available. DSM units, resolution, CRS, and shadow
-obstruction remain unverified.
+The authenticated DSM run retrieved all 12 requested TIFF tiles (HTTP 200)
+from `us-tx-houston-2026`, layer `urban`, zoom 18, x=61576–61579,
+y=108377–108379. Each tile is 256 × 256 float32 samples, with EPSG:3857
+horizontal coordinates, about 0.5972 projected m/pixel (about 0.519 m
+ground spacing at Greenway), and a declared NoData value of -9999.
+The files lack a vertical CRS tag. Vexcel's DSM tile specification describes
+elevations in meters above EGM2008. A direct read of the big-endian Deflate
+payload produced finite elevation samples for all tiles. Shadow obstruction
+has not been evaluated for a particular sun angle or camera position.
+
+[Vexcel DSM tile specification](https://vexcel.atlassian.net/wiki/spaces/APIDOCS/pages/2122448939/)
 
 [Vexcel v2 documentation](https://api.vexcelgroup.com/v2/)
 
