@@ -136,7 +136,7 @@ select {max-width:100%} canvas {width:100%;display:block;margin-top:12px;backgro
 </form>
 </details><label id="room-picker" hidden>Room <select aria-label="Imported room"></select></label><div id="shot-grid"><div id="viewport" hidden>
 <div id="camera-hud" aria-hidden="true"><span id="shot-time">00:00.0</span><span id="shot-lens">35 mm</span></div>
-</div><canvas id="plan" width="720" height="500" hidden aria-label="Scaled room outline. Click to place the selected mark"></canvas></div><p id="render-status" role="status"></p>
+</div><canvas id="plan" width="720" height="500" hidden aria-label="Scaled room outline. Drag actor marks or click to place the selected mark"></canvas></div><p id="render-status" role="status"></p>
 <form id="alignment" hidden>
 <button type="button" id="alignment-view" aria-pressed="false">Inspect mesh alignment</button>
 <label>Floor elevation (m) <input name="height" type="number" step="any" min="-200" max="200" required></label>
@@ -190,7 +190,7 @@ select {max-width:100%} canvas {width:100%;display:block;margin-top:12px;backgro
 <button id="center-aim" type="button">Aim at actors</button>
 <button id="mark-obstacle" type="button" aria-pressed="false">Mark furniture</button>
 <button id="undo-obstacle" type="button" disabled>Undo last mark</button>
-<p id="plan-instructions">Click the plan to place the selected mark.</p>
+<p id="plan-instructions">Drag A1 or A2 to move an actor. Click empty space to place the selected mark.</p>
 </div><form id="direction" hidden>
 <input aria-label="Camera direction" placeholder="Try a 1.5 m slide" maxlength="160" required>
 <button>Replan shot</button>
@@ -202,4 +202,4 @@ select {max-width:100%} canvas {width:100%;display:block;margin-top:12px;backgro
 </div>
 </main>
 <script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"}}</script>
-<script type="module" src="scout.js"></script></body></html>
+<script type="module" src="scout.js?v=actor-drag"></script></body></html>

@@ -76,6 +76,7 @@ let drawPlan;
 let toWorld;
 let pose;
 let draft;
+let actorDrag;
 let obstacles = [];
 let obstacleKey;
 let marking = false;
@@ -89,7 +90,7 @@ function setMarking(enabled) {
   draft = undefined;
   markButton.setAttribute("aria-pressed", String(enabled));
   instructions.textContent = enabled ? "Drag around the furniture footprint."
-    : "Click the plan to place the selected mark.";
+    : "Drag A1 or A2 to move an actor. Click empty space to place the selected mark.";
   drawPlan?.(pose);
 }
 
@@ -115,6 +116,15 @@ canvas.addEventListener("pointerdown", event => {
   if (document.querySelector("#viewport").hidden || !toWorld || event.button !== 0) return;
   const point = toWorld(event);
   if (!marking) {
+    if (actorDrag) return;
+    const [x, z] = toWorld({clientX: event.clientX + 14, clientY: event.clientY + 14});
+    const hit = pose?.actors.findIndex(mark => mark &&
+      Math.hypot((mark[0] - point[0]) / (x - point[0]), (mark[1] - point[1]) / (z - point[1])) <= 1);
+    if (hit >= 0) {
+      canvas.setPointerCapture(event.pointerId);
+      actorDrag = {pointer: event.pointerId, index: hit, origin: point, point, map: toWorld};
+      return;
+    }
     if (placeMark.value === "camera") {
       canvas.dispatchEvent(new CustomEvent("choosecamera", {detail: point}));
     } else if (placeMark.value === "aim") {
@@ -130,11 +140,27 @@ canvas.addEventListener("pointerdown", event => {
   draft = [point, point];
 });
 canvas.addEventListener("pointermove", event => {
+  if (actorDrag?.pointer === event.pointerId && actorDrag.map === toWorld) {
+    actorDrag.point = toWorld(event);
+    drawPlan?.(pose);
+    return;
+  }
   if (!draft || !toWorld) return;
   draft[1] = toWorld(event);
   drawPlan?.(pose);
 });
 canvas.addEventListener("pointerup", event => {
+  if (actorDrag?.pointer === event.pointerId) {
+    const {index, origin, map} = actorDrag;
+    actorDrag = undefined;
+    if (map === toWorld) {
+      const point = map(event);
+      if (Math.hypot(point[0]-origin[0], point[1]-origin[1]) > .005)
+        canvas.dispatchEvent(new CustomEvent("chooseactor", {detail: {index, point}}));
+      drawPlan?.(pose);
+    }
+    return;
+  }
   if (!draft || !toWorld) return;
   const [a, b] = draft;
   const min = a.map((value, i) => Math.min(value, b[i]));
@@ -145,7 +171,12 @@ canvas.addEventListener("pointerup", event => {
   setMarking(false);
   publishObstacles();
 });
-canvas.addEventListener("pointercancel", () => setMarking(false));
+canvas.addEventListener("pointercancel", event => {
+  if (actorDrag?.pointer === event.pointerId) {
+    actorDrag = undefined;
+    drawPlan?.(pose);
+  } else if (draft) setMarking(false);
+});
 document.querySelector("#viewport").addEventListener("shotpose", event => {
   pose = event.detail;
   drawPlan?.(pose);
@@ -360,6 +391,7 @@ async function inspectRoom(row, model, roomId, proposedShot) {
 }
 
 function renderRoom(room) {
+  actorDrag = undefined;
   const points = room.outline;
   if (!Array.isArray(points) || points.length < 3 ||
       points.some(point => !Array.isArray(point) || point.length !== 2 || !point.every(Number.isFinite))) {
@@ -429,6 +461,14 @@ function renderRoom(room) {
           context.fillRect(x - 3, y - 3, 6, 6);
           context.fillText(label, x + 8, y - 9);
         }
+      }
+      if (actorDrag?.map === toWorld) {
+        const [x, z] = coords(actorDrag.point);
+        context.strokeStyle = "#ffffff";
+        context.lineWidth = 2;
+        context.beginPath();
+        context.arc(x, z, 10, 0, 2 * Math.PI);
+        context.stroke();
       }
       for (const [index, point] of pose.actors.entries()) {
         if (!point) continue;
