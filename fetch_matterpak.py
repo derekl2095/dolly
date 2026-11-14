@@ -13,6 +13,12 @@ from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 import zipfile
 
+MAX_ARCHIVE_BYTES = 250 * 1024**2
+
+
+class MatterPakUnavailable(ValueError):
+    """The API did not provide a downloadable bundle for this model."""
+
 GRAPH = "https://api.matterport.com/api/models/graph"
 QUERY = """query Mesh($id: ID!) {
   model(id: $id) {
@@ -38,12 +44,26 @@ def get_download(model, key, token):
     with urlopen(request, timeout=30) as response:
         result = json.load(response)
     data = (result.get("data") or {}).get("model") or {}
+    if result.get("errors") and not data:
+        raise MatterPakUnavailable("Matterport could not return this model. Check the server credentials and model access.")
     bundle = data.get("bundle") or {}
-    assets = ((data.get("assets") or {}).get("resources") or []) + (bundle.get("assets") or [])
-    for asset in assets:
-        if asset and asset.get("url"):
+    assets = (bundle.get("assets") or []) + ((data.get("assets") or {}).get("resources") or [])
+    links = [asset for asset in assets if asset and isinstance(asset.get("url"), str)
+             and urlsplit(asset["url"]).scheme == "https"]
+    for asset in links:
+        url = asset["url"]
+        if any(str(name).lower().endswith(".zip") for name in
+               (asset.get("filename"), urlsplit(url).path)):
+            return url
+    # The bundle API can return an opaque signed URL without a filename.
+    for asset in links:
+        if asset in (bundle.get("assets") or []) and not asset.get("filename"):
             return asset["url"]
-    raise ValueError(f"No MatterPak download link. Bundle status: {bundle.get('availability', 'unknown')}.")
+    availability = bundle.get("availability", "unknown")
+    raise MatterPakUnavailable(
+        f"Matterport did not provide a MatterPak ZIP (bundle status: {availability}). "
+        "Check that the bundle is ready and accessible to the server account, or upload its ZIP."
+    )
 
 
 def mesh_assets(root, manifest, *, require_textures=False):
@@ -76,7 +96,7 @@ def mesh_assets(root, manifest, *, require_textures=False):
     return mesh
 
 
-def unpack(archive, destination):
+def unpack(archive, destination, *, replace_incomplete=False):
     suffixes = {".obj", ".mtl", ".jpg", ".jpeg", ".png"}
     with zipfile.ZipFile(archive) as bundle, tempfile.TemporaryDirectory(dir=destination.parent) as temp:
         staging = (Path(temp) / "mesh").resolve()
@@ -110,20 +130,34 @@ def unpack(archive, destination):
         }
         mesh_assets(staging, manifest)
         (staging / "manifest.json").write_text(json.dumps(manifest))
-        if destination.exists():
+        if not destination.exists():
+            staging.rename(destination)
+            return
+        if not replace_incomplete:
             raise FileExistsError(f"Already imported: {destination}")
-        staging.rename(destination)
+        backup = Path(temp) / "previous"
+        destination.rename(backup)
+        try:
+            staging.rename(destination)
+        except OSError:
+            backup.rename(destination)
+            raise
 
 
-def download_mesh(model, destination, key, token):
+def download_mesh(model, destination, key, token, *, replace_incomplete=False):
     url = get_download(model, key.strip(), token.strip())
     if urlsplit(url).scheme != "https":
         raise ValueError("Matterport did not return a secure download URL.")
     destination.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryFile() as archive, urlopen(url, timeout=60) as response:
-        shutil.copyfileobj(response, archive)
+        size = 0
+        while chunk := response.read(1024**2):
+            size += len(chunk)
+            if size > MAX_ARCHIVE_BYTES:
+                raise ValueError("MatterPak ZIP exceeds 250 MB.")
+            archive.write(chunk)
         archive.seek(0)
-        unpack(archive, destination)
+        unpack(archive, destination, replace_incomplete=replace_incomplete)
 
 
 def main():

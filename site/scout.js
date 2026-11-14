@@ -1,7 +1,7 @@
 import {readShotExport} from "./path.js";
 import {parseProjectArchive, projectArchiveMaxBytes, readProjects, writeProject} from "./projects.js";
 import {loadObstacles, outlineMeasurements, roomKey} from "./room-state.js";
-import {briefSuggestions, runAgent} from "./agent.js";
+import {briefSuggestions, runAgent} from "./agent.js?v=agent-capture";
 import {compareCapturedRooms} from "./compare.js";
 import {openMesh, closeMesh, currentShot, planCurrentShot, applyCurrentShot} from "./mesh.js";
 
@@ -23,9 +23,9 @@ document.querySelector("#retry-mesh").addEventListener("click", async () => {
 const importMesh = document.querySelector("#import-mesh");
 const retryMesh = document.querySelector("#retry-mesh");
 const renderStatus = document.querySelector("#render-status");
-importMesh.addEventListener("click", async () => {
-  const room = selectedRoom;
-  const request = roomRequest;
+importMesh.addEventListener("click", () => prepareMatterPak(selectedRoom, roomRequest));
+
+async function prepareMatterPak(room, request) {
   if (!room || !request) return;
   importMesh.disabled = retryMesh.disabled = true;
   renderStatus.textContent = "Downloading the selected MatterPak…";
@@ -36,9 +36,16 @@ importMesh.addEventListener("click", async () => {
     const result = await response.json();
     if (request.signal.aborted) return;
     if (!response.ok) throw Error(result.error || "MatterPak import failed.");
-    const shot = currentShot();
+    const shot = currentShot() ?? room.proposedShot;
+    const params = new URLSearchParams({model: room.modelId});
+    if (room.roomId) params.set("room", room.roomId);
+    const detail = await fetch("/api/room?" + params, {signal: request.signal});
+    if (!detail.ok) throw Error("The MatterPak was saved. Reopen the room to load it.");
+    const updated = await detail.json();
+    if (request.signal.aborted) return;
+    selectedRoom = shot ? {...updated, proposedShot: shot} : updated;
     closeMesh();
-    await openMesh(shot ? {...room, proposedShot: shot} : room, request.signal);
+    await openMesh(selectedRoom, request.signal);
   } catch (error) {
     if (!request.signal.aborted) renderStatus.textContent = error.message;
   } finally {
@@ -47,7 +54,7 @@ importMesh.addEventListener("click", async () => {
       importMesh.disabled = retryMesh.disabled = false;
     }
   }
-});
+}
 const uploadMesh = document.querySelector("#upload-mesh");
 const meshFile = uploadMesh.querySelector("input");
 meshFile.addEventListener("change", async () => {
@@ -237,17 +244,17 @@ function card(row, readiness = {}) {
   const pin = element("button", "Shortlist scan");
   pin.addEventListener("click", () => {
     const modelId = scans.value;
-    if (shortlist.some(item => item.modelId === modelId)) {
-      status.textContent = "That scan is already shortlisted.";
-      return;
+    if (!shortlist.some(item => item.modelId === modelId)) {
+      if (shortlist.length >= 30) {
+        status.textContent = "Remove a scan before adding another to the shortlist.";
+        return;
+      }
+      shortlist.push({modelId, label: row.name || row.street, caption: row.models[modelId] || modelId});
+      renderShortlist();
     }
-    if (shortlist.length >= 30) {
-      status.textContent = "Remove a scan before adding another to the shortlist.";
-      return;
-    }
-    shortlist.push({modelId, label: row.name || row.street, caption: row.models[modelId] || modelId});
     shortlistPanel.open = true;
-    renderShortlist();
+    roomStatus.scrollIntoView({block: "center"});
+    void inspectRoom(row, modelId);
   });
   article.append(scans, document.createElement("br"), inspect, pin);
   return article;
@@ -287,7 +294,7 @@ function enableMeasuredImport(row, model, signal) {
   };
 }
 
-async function inspectRoom(row, model, roomId, proposedShot) {
+async function inspectRoom(row, model, roomId, proposedShot, autoGeometry = true) {
   roomRequest?.abort();
   measuredRoom.hidden = true;
   uploadMesh.hidden = true;
@@ -331,13 +338,13 @@ async function inspectRoom(row, model, roomId, proposedShot) {
       scan.target = "_blank";
       scan.rel = "noopener";
       roomStatus.replaceChildren(document.createTextNode(data.error + " "), scan);
-      if (response.status === 404) {
+      if (response.status === 404 && choices.length === 0) {
         const available = await fetch("/api/room-import-status", {signal: request.signal})
           .then(reply => reply.ok ? reply.json() : {}).catch(() => ({}));
         if (available.configured && !request.signal.aborted) {
           const importButton = element("button", "Import room geometry");
           importButton.type = "button";
-          importButton.addEventListener("click", async () => {
+          const importGeometry = async () => {
             importButton.disabled = true;
             roomStatus.replaceChildren(document.createTextNode("Importing Matterport room geometry…"));
             try {
@@ -347,15 +354,20 @@ async function inspectRoom(row, model, roomId, proposedShot) {
               const result = await reply.json();
               if (request.signal.aborted) return;
               if (!reply.ok) throw Error(result.error);
-              await inspectRoom(row, model, roomId, proposedShot);
+              return await inspectRoom(row, model, roomId, proposedShot, false);
             } catch (error) {
               if (!request.signal.aborted) {
                 importButton.disabled = false;
                 roomStatus.replaceChildren(document.createTextNode(error.message + " "), scan, " ", importButton);
               }
             }
-          });
+          };
+          importButton.addEventListener("click", importGeometry);
+          if (autoGeometry) return await importGeometry();
           roomStatus.append(" ", importButton);
+        } else if (!request.signal.aborted) {
+          roomStatus.prepend(document.createTextNode(
+            "Start the server with Matterport credentials to import this scan automatically. "));
         }
       }
       return;
@@ -373,9 +385,10 @@ async function inspectRoom(row, model, roomId, proposedShot) {
     await openMesh(selectedRoom, request.signal);
     if (!request.signal.aborted && !retryMesh.hidden) {
       uploadMesh.hidden = false;
-      const available = await fetch("/api/room-import-status", {signal: request.signal})
-        .then(reply => reply.ok ? reply.json() : {}).catch(() => ({}));
-      if (!request.signal.aborted) importMesh.hidden = !available.configured;
+      importMesh.hidden = !data.matterpakDownloadConfigured;
+      if (data.matterpakDownloadConfigured && !data.matterpakAvailable) {
+        await prepareMatterPak(selectedRoom, request);
+      }
     }
     if (request.signal.aborted || document.querySelector("#viewport").hidden) return false;
     const url = new URL(location.href);
@@ -692,7 +705,7 @@ async function restoreSelection(selection) {
   return true;
 }
 
-async function openCheckedProposal(room, setup) {
+async function openCheckedProposal(room, setup, requireCapture = false) {
   const previous = selectionSnapshot();
   const opening = inspectRoom({name: room.label || room.modelId}, room.modelId, room.roomId, setup);
   const request = roomRequest;
@@ -700,10 +713,14 @@ async function openCheckedProposal(room, setup) {
   if (request !== roomRequest || request.signal.aborted)
     throw Error("The room changed while the proposal was opening. Your selection was kept.");
   const missingSightlines = opened && setup.requireSightlines && document.querySelector("#check-scan").disabled;
-  if (!opened || missingSightlines) {
+  const missingCapture = opened && requireCapture && !retryMesh.hidden;
+  if (!opened || missingSightlines || missingCapture) {
     await restoreSelection(previous);
-    throw Error(missingSightlines ? "The proposal requires an aligned MatterPak, which the editor could not load."
+    const error = Error(missingSightlines ? "The proposal requires an aligned MatterPak, which the editor could not load."
+      : missingCapture ? "The MatterPak was prepared, but the captured 3D scene could not load."
       : "Could not open the proposed shot.");
+    if (requireCapture) error.code = "capture-unavailable";
+    throw error;
   }
 }
 
@@ -983,7 +1000,7 @@ document.querySelector("#review-brief").addEventListener("click", () => {
     constraints.targetTravel === null ? "" : "Preferred travel: " + constraints.targetTravel + " m.",
     "Minimum travel: " + constraints.minimumTravel + " m.",
     constraints.requireSightlines ? "Captured sightlines required." : "Captured sightlines optional.",
-    constraints.allowImport ? "Matterport outline imports allowed for this run." : "",
+    constraints.allowImport ? "Matterport room and MatterPak imports allowed for this run." : "",
     constraints.allowApply ? "Open a qualifying proposal automatically." : "Report proposals only.",
   ];
   if (!constraints.shortlist && !city && !category) lines[0] = "Catalog city and property type are flexible.";
@@ -1012,6 +1029,8 @@ agentForm.addEventListener("submit", async event => {
   const initialRoom = selectedRoom;
   const previousShot = currentShot();
   const initialShot = JSON.stringify(previousShot);
+  let expectedRoom = initialRoom;
+  let expectedShot = initialShot;
   button.disabled = true;
   agentEvidence.replaceChildren();
   agentActivity.replaceChildren();
@@ -1106,8 +1125,8 @@ agentForm.addEventListener("submit", async event => {
         }
       },
       activity: text => agentActivity.append(element("li", text)),
-      apply: async (room, setup) => {
-        if (initialRoom !== selectedRoom || initialShot !== JSON.stringify(currentShot()))
+      apply: async (room, setup, requireCapture) => {
+        if (expectedRoom !== selectedRoom || expectedShot !== JSON.stringify(currentShot()))
           throw Error("The open setup changed during scouting. Your changes were kept.");
         if (!room) {
           applyCurrentShot(setup);
@@ -1116,7 +1135,15 @@ agentForm.addEventListener("submit", async event => {
           undoAgent.hidden = false;
           return;
         }
-        await openCheckedProposal(room, setup);
+        try {
+          await openCheckedProposal(room, setup, requireCapture);
+        } catch (error) {
+          if (error.code === "capture-unavailable") {
+            expectedRoom = selectedRoom;
+            expectedShot = JSON.stringify(currentShot());
+          }
+          throw error;
+        }
         applied = true;
         previousRoom = initialRoom && {...initialRoom, proposedShot: previousShot || initialRoom.proposedShot};
         undoAgent.hidden = !previousRoom;

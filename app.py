@@ -1,13 +1,18 @@
 """Serve the local scouting catalog and model-specific room exports."""
 import argparse
+import getpass
 import json
 import math
 import tempfile
 import mimetypes
 import shutil
 import sqlite3
+import ssl
+import subprocess
+import sys
 import zipfile
 from threading import Lock
+from weakref import WeakValueDictionary
 import os
 import re
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -18,7 +23,7 @@ from urllib.parse import parse_qs, unquote, urlsplit
 import daylight
 
 from catalog import build, coordinates_indexed, index_property_coordinates, scan_location, search_page, source_mode
-from fetch_matterpak import download_mesh, mesh_assets, stored_locally, unpack
+from fetch_matterpak import MAX_ARCHIVE_BYTES, MatterPakUnavailable, download_mesh, mesh_assets, stored_locally, unpack
 from import_room import DEFAULT_ASSETS, OPENINGS_QUERY, opening_candidates, import_measured_room, import_rooms, read_model, valid_id
 from model_provider import configured, next_turn
 
@@ -31,11 +36,32 @@ def matterport_configured():
     return all(os.getenv(name) for name in ("MATTERPORT_API_KEY", "MATTERPORT_API_TOKEN"))
 
 
+def load_matterport_keychain():
+    """Fill missing server credentials from the current user's macOS Keychain."""
+    if sys.platform != "darwin" or matterport_configured():
+        return
+    account = getpass.getuser()
+    for variable, service in (("MATTERPORT_API_KEY", "scout-matterport-key"),
+                              ("MATTERPORT_API_TOKEN", "scout-matterport-token")):
+        if os.getenv(variable):
+            continue
+        try:
+            result = subprocess.run(
+                ["/usr/bin/security", "find-generic-password", "-a", account, "-s", service, "-w"],
+                capture_output=True, text=True, timeout=30, check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        if result.returncode == 0 and result.stdout.strip():
+            os.environ[variable] = result.stdout.strip()
+
+
 class ScoutServer(ThreadingHTTPServer):
     def __init__(self, address, database, assets):
         self.database = database
         self.assets = assets
         self.mesh_import_lock = Lock()
+        self.mesh_imports = WeakValueDictionary()
         super().__init__(address, Handler)
 
     def mesh_root(self, model):
@@ -43,6 +69,19 @@ class ScoutServer(ThreadingHTTPServer):
         if (cached / "manifest.json").is_file():
             return cached.resolve()
         return (self.assets / "static" / "matterpak" / model).resolve()
+
+    def mesh_lock(self, model):
+        with self.mesh_import_lock:
+            return self.mesh_imports.setdefault(model, Lock())
+
+    def mesh_available(self, model):
+        root = self.mesh_root(model)
+        try:
+            manifest = json.loads((root / "manifest.json").read_text())
+            mesh_assets(root, manifest)
+        except (OSError, ValueError, TypeError, KeyError):
+            return False
+        return True
 
     def mesh_revision(self, model):
         root = self.mesh_root(model)
@@ -130,11 +169,7 @@ class ScoutServer(ThreadingHTTPServer):
         result = {"roomCount": len(rooms), "meshAvailable": False, "alignedRoomCount": 0}
         if not rooms:
             return result
-        root = self.mesh_root(model)
-        try:
-            manifest = json.loads((root / "manifest.json").read_text())
-            mesh_assets(root, manifest)
-        except (OSError, ValueError, TypeError, KeyError):
+        if not self.mesh_available(model):
             return result
         result["meshAvailable"] = True
         result["alignedRoomCount"] = sum(room.get("matterpakAlignmentVerified") is True for room in rooms)
@@ -330,24 +365,20 @@ class Handler(SimpleHTTPRequestHandler):
             return self.respond(400, {"error": "Invalid Matterport model ID."})
         if not self.server.rooms(model):
             return self.respond(404, {"error": "Import the room geometry first."})
-        if not self.server.mesh_import_lock.acquire(blocking=False):
-            return self.respond(409, {"error": "A MatterPak download is in progress. Try again when it finishes."})
+        with self.server.mesh_lock(model):
+            return self.prepare_matterpak(model, upload)
+
+    def prepare_matterpak(self, model, upload):
+        destination = MESH_CACHE / model
+        if self.server.mesh_available(model):
+            return self.respond(200, {"cached": True})
         try:
-            destination = MESH_CACHE / model
-            existing = self.server.mesh_root(model)
-            try:
-                manifest = json.loads((existing / "manifest.json").read_text())
-                mesh_assets(existing, manifest)
-                return self.respond(200, {"cached": True})
-            except (OSError, ValueError, TypeError, KeyError):
-                if destination.exists():
-                    return self.respond(409, {"error": "The local MatterPak cache is incomplete or offline. Make its files available or move that cache folder aside before importing again."})
             if upload:
                 try:
                     remaining = int(self.headers.get("Content-Length", ""))
                 except ValueError:
                     remaining = 0
-                if not 0 < remaining <= 250 * 1024**2:
+                if not 0 < remaining <= MAX_ARCHIVE_BYTES:
                     return self.respond(413, {"error": "Select a ZIP up to 250 MB."})
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 with tempfile.TemporaryFile() as archive:
@@ -358,17 +389,20 @@ class Handler(SimpleHTTPRequestHandler):
                         archive.write(chunk)
                         remaining -= len(chunk)
                     archive.seek(0)
-                    unpack(archive, destination)
+                    unpack(archive, destination, replace_incomplete=True)
             else:
                 if not matterport_configured():
                     return self.respond(503, {"error": "Configure the Matterport key and token in the server environment."})
-                download_mesh(model, destination, os.environ["MATTERPORT_API_KEY"], os.environ["MATTERPORT_API_TOKEN"])
-        except (URLError, TimeoutError):
-            return self.respond(502, {"error": "Matterport did not complete the download."})
+                download_mesh(model, destination, os.environ["MATTERPORT_API_KEY"],
+                              os.environ["MATTERPORT_API_TOKEN"], replace_incomplete=True)
+        except MatterPakUnavailable as error:
+            return self.respond(422, {"error": str(error)})
+        except (URLError, TimeoutError) as error:
+            if getattr(error, "code", None) in {401, 403}:
+                return self.respond(403, {"error": "Matterport denied the request. Check the server credentials and access to this bundle."})
+            return self.respond(502, {"error": "Matterport did not complete the download. Try again or upload the ZIP."})
         except (OSError, ValueError, zipfile.BadZipFile):
-            return self.respond(422, {"error": "No usable MatterPak could be imported for this scan."})
-        finally:
-            self.server.mesh_import_lock.release()
+            return self.respond(422, {"error": "The MatterPak archive could not be imported. Check that it contains a usable mesh and fits within the size limits."})
         return self.respond(201, {"cached": False})
 
     def save_alignment(self, payload):
@@ -446,6 +480,8 @@ class Handler(SimpleHTTPRequestHandler):
                 return self.respond(404, {"error": "This scan has no imported room outline yet."})
             if (CAPTURE_CACHE / f"{model}.jpg").is_file() or (self.server.mesh_root(model) / "colorplan_000.jpg").is_file():
                 room["capturePlan"] = f"/matterpak/{model}/colorplan_000.jpg"
+            room["matterpakAvailable"] = self.server.mesh_available(model)
+            room["matterpakDownloadConfigured"] = matterport_configured()
             return self.respond(200, room)
         if url.path.startswith("/matterpak/"):
             model, separator, resource = url.path.removeprefix("/matterpak/").partition("/")
@@ -481,6 +517,11 @@ def main():
         "COSTAR_KIT", Path.home() / "Desktop/costar-hackathon/costar-hackathon-kit")))
     parser.add_argument("--port", type=int, default=8001)
     args = parser.parse_args()
+    if sys.platform == "darwin" and "SSL_CERT_FILE" not in os.environ:
+        system_ca = Path("/etc/ssl/cert.pem")
+        if not ssl.get_default_verify_paths().cafile and system_ca.is_file():
+            os.environ["SSL_CERT_FILE"] = str(system_ca)
+    load_matterport_keychain()
     try:
         mode = source_mode(args.db)
     except sqlite3.OperationalError:

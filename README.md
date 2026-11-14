@@ -26,8 +26,10 @@ to open the legacy checkout. The server reads rooms/MODEL_ID/ROOM_ID.json,
 rooms/MODEL_ID.json, and the legacy room.json. Search, select a linked scan, and choose Inspect room.
 The viewer draws the imported metric outline and reports its bounding spans.
 
-Room inspection loads assets on demand. The app can import additional scans with
-Matterport credentials configured.
+**Shortlist scan** saves the selected scan and opens it in the editor immediately.
+With Matterport credentials on the server, it imports missing room outlines,
+opens the first available room, and loads its cached or freshly downloaded
+MatterPak. Use the room selector if the scan has several rooms.
 
 ## MatterPak workspace
 
@@ -144,16 +146,29 @@ checking model alignment. Greenway uses a checked preset. Missing geometry
 or alignment is reported as unknown. The cross-room search bounds expensive
 mesh checks to eight candidates per room.
 
-With MATTERPORT_API_KEY and MATTERPORT_API_TOKEN configured in the server
-environment, a scan without a local room offers **Import room geometry**.
-This fetches geometry for the selected model and opens the imported room.
-The separate MatterPak importer retrieves textures when needed.
+On macOS, save the Matterport credentials as password items named
+`scout-matterport-key` and `scout-matterport-token` in your login Keychain.
+Set the account on both items to your macOS username. The app reads them
+automatically at startup. You may be prompted for Keychain access on first use.
+For other setups or to override Keychain, set `MATTERPORT_API_KEY` and
+`MATTERPORT_API_TOKEN` in the server environment. Opening a linked scan fetches missing room outlines and then
+downloads its MatterPak on demand. The server caches the validated archive
+contents by model ID, so reopening the scan or switching rooms reuses the same
+assets. The editor shows the scaled outline while the bundle downloads and
+keeps the current shot when it switches to the captured mesh.
 
-When the selected room has an outline and the server has Matterport
-credentials, **Import MatterPak** can fetch its available bundle from the
-room workspace. The editor keeps the current camera settings during import
-and loads the captured mesh when it becomes available. Imported scans still
-need alignment review before using them for captured sightline checks.
+The server needs access to an existing MatterPak ZIP for that scan. If
+Matterport does not expose one, the editor keeps the outline and offers ZIP
+upload. The editor still needs an alignment review for a new mesh before
+using it for captured sightline checks.
+
+In the scout, enable **Allow the agent to fetch room outlines and MatterPaks**
+and the option to apply its recommendation. The agent can import outlines
+for promising CoStar leads, evaluate shot setups, and prepare the captured
+scene for its recommendation. If the preferred capture fails, it tries the
+next qualifying scan. Each investigation can request up to two uncached
+MatterPaks. Properties with no linked scan or no accessible bundle remain
+leads for follow-up.
 
 For an imported MatterPak, **Inspect mesh alignment** overlays the metric
 outline on an overhead mesh view. Adjust floor elevation and save the

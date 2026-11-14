@@ -345,3 +345,43 @@ test("continuing a catalog search preserves hard filters and includes later lead
   assert.deepEqual(offsets, [0, 6]);
   assert.deepEqual(evidence.unverifiedLeads.map(lead => lead.id), [1, 7]);
 });
+
+test("an agent downloads its preferred capture and opens the next qualifying scan if needed", async () => {
+  const models = ["First", "Second"];
+  const call = (name, args) => ({
+    id: name + args.model, function: {name, arguments: JSON.stringify(args)},
+  });
+  const turns = [
+    {tool_calls: models.map(model => call("get_room_evidence", {model, room: "room"}))},
+    {tool_calls: models.map(model => call("evaluate_shot", {model, room: "room",
+      lens: 35, slide: .7, move: "slide", requireSightlines: false}))},
+    {tool_calls: [call("apply_shot", {candidate: "shot-1"})]},
+    {content: "Checked both setups."},
+  ];
+  const imports = [];
+  let opened;
+  const result = await runAgent("Scout a slide", {
+    shortlist: models.map(modelId => ({modelId})), allowImport: true, allowApply: true,
+    activity() {},
+    apply(room, setup, captureRequired) { opened = {model: room.modelId, setup, captureRequired}; },
+    async api(path, options) {
+      const url = new URL(path, "http://localhost");
+      if (url.pathname === "/api/agent-turn") return turns.shift();
+      if (url.pathname === "/api/import-matterpak") {
+        const {model} = JSON.parse(options.body);
+        imports.push(model);
+        if (model === "First") throw Error("No ZIP available.");
+        return {cached: false};
+      }
+      assert.equal(url.pathname, "/api/room");
+      return {modelId: url.searchParams.get("model"), roomId: "room", height: 3,
+        outline: [[-3,-6],[3,-6],[3,6],[-3,6]], camera: [0,4], lookAt: [0,0],
+        actors: [[-.5,0],[.5,0]], slideAxis: [1,0]};
+    },
+  });
+  assert.deepEqual(imports, models);
+  assert.equal(opened.model, "Second");
+  assert.equal(opened.captureRequired, true);
+  assert.equal(opened.setup.lens, 35);
+  assert.match(result, /Opened shot-2/);
+});
