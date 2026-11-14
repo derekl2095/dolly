@@ -22,6 +22,15 @@ QUERY = """query Mesh($id: ID!) {
 }"""
 
 
+def stored_locally(info):
+    """A cloud placeholder has a size but no allocated blocks.
+
+    Windows stat results omit st_blocks for an ordinary local file.
+    """
+    blocks = getattr(info, "st_blocks", None)
+    return bool(info.st_size) and blocks != 0
+
+
 def get_download(model, key, token):
     auth = base64.b64encode(f"{key}:{token}".encode()).decode()
     request = Request(GRAPH, json.dumps({"query": QUERY, "variables": {"id": model}}).encode(),
@@ -46,7 +55,7 @@ def mesh_assets(root, manifest, *, require_textures=False):
         if not path.is_relative_to(root) or path.suffix.lower() not in suffixes or not path.is_file():
             raise ValueError("A required MatterPak asset is missing or invalid.")
         info = path.stat()
-        if not info.st_size or not info.st_blocks:
+        if not stored_locally(info):
             raise ValueError("A required MatterPak asset is empty or offline.")
         return path
 

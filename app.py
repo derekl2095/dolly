@@ -16,7 +16,7 @@ from urllib.error import URLError
 from urllib.parse import parse_qs, unquote, urlsplit
 
 from catalog import build, search_page, source_mode
-from fetch_matterpak import download_mesh, mesh_assets, unpack
+from fetch_matterpak import download_mesh, mesh_assets, stored_locally, unpack
 from import_room import DEFAULT_ASSETS, import_measured_room, import_rooms, read_model, valid_id
 from model_provider import configured, next_turn
 
@@ -50,7 +50,7 @@ class ScoutServer(ThreadingHTTPServer):
             if not obj.is_relative_to(root):
                 return None
             info = obj.stat()
-            if not info.st_size or not info.st_blocks:
+            if not stored_locally(info):
                 return None
             return [obj.name, info.st_size, info.st_mtime_ns]
         except (OSError, ValueError, TypeError, KeyError):
@@ -356,7 +356,7 @@ class Handler(SimpleHTTPRequestHandler):
                     or not path.is_file()):
                 return self.send_error(404)
             info = path.stat()
-            if info.st_size and not info.st_blocks:
+            if info.st_size and not stored_locally(info):
                 return self.send_error(503, "Make this MatterPak file available offline")
             with path.open("rb") as file:
                 self.send_response(200)
@@ -382,7 +382,7 @@ def main():
         mode = None
     property_file = args.kit / "data" / "commercial-property.jsonl"
     info = property_file.stat() if property_file.is_file() else None
-    starter_only = info is None or bool(info.st_size and not info.st_blocks)
+    starter_only = info is None or bool(info.st_size and not stored_locally(info))
     if mode is None or (mode == "addresses" and not starter_only):
         print("Building the CoStar catalog…", flush=True)
         try:

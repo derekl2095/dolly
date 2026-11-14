@@ -2,10 +2,12 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from catalog import build, inventory, search, search_page
 from capture_status import local_status, probe
+from fetch_matterpak import stored_locally
 
 
 class CatalogTests(unittest.TestCase):
@@ -64,6 +66,16 @@ class CaptureTests(unittest.TestCase):
         self.assertEqual(info["geometry"], "no closed boundaries")
         self.assertEqual(info["bundle"], "download link available")
         self.assertNotIn("https", json.dumps(info))
+
+
+class StoredLocallyTests(unittest.TestCase):
+    def test_windows_stat_without_blocks_counts_as_local(self):
+        self.assertTrue(stored_locally(SimpleNamespace(st_size=10)))
+
+    def test_cloud_placeholder_and_empty_files_do_not(self):
+        self.assertFalse(stored_locally(SimpleNamespace(st_size=10, st_blocks=0)))
+        self.assertFalse(stored_locally(SimpleNamespace(st_size=0, st_blocks=4)))
+        self.assertTrue(stored_locally(SimpleNamespace(st_size=10, st_blocks=4)))
 
 
 if __name__ == "__main__":
