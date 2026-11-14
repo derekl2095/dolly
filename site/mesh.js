@@ -1,4 +1,5 @@
 import {alignMesh, sightlineCheck} from "./sightlines.js";
+import {GREENWAY_LIGHT, sunlight} from "./sun.js";
 import {actorMarks, checkCameraHeight, loadShot, roomKey, shotSettings} from "./room-state.js";
 import {cameraMoveAxis, checkFraming, checkRigClearance, easedPathFraction, editorShotState, findSlide, interpretDirection, pathFromEndpoints, timeFractionAtPath} from "./path.js";
 
@@ -26,6 +27,10 @@ const alignmentView = document.querySelector("#alignment-view");
 const alignmentStatus = document.querySelector("#alignment-status");
 const checkScan = document.querySelector("#check-scan");
 const keepMark = document.querySelector("#keep-mark");
+const sunPreview = document.querySelector("#sun-preview");
+const sunHour = document.querySelector("#sun-hour");
+const sunHeading = document.querySelector("#sun-heading");
+const sunStatus = document.querySelector("#sun-status");
 const exportShot = document.querySelector("#export-shot");
 const directionForm = document.querySelector("#direction");
 const fit = document.querySelector("#fit");
@@ -205,7 +210,30 @@ function mount(THREE, room, mesh, textures, release, captured = false) {
     torso.visible = head.visible = Boolean(point);
     marks.add(torso, head);
   }
-  scene.add(marks, new THREE.HemisphereLight(0xffffff, 0xb7a28f, 2.3));
+  const fill = new THREE.HemisphereLight(0xffffff, 0xb7a28f, 2.3);
+  const sunLight = new THREE.DirectionalLight(0xffe0b0, 0);
+  const sunTarget = new THREE.Object3D();
+  sunLight.target = sunTarget;
+  const site = room.modelId === GREENWAY_LIGHT.modelId ? GREENWAY_LIGHT : null;
+  const sunlit = new Map();
+  if (site) mesh.traverse(object => {
+    if (!object.isMesh) return;
+    const lit = [object.material].flat().map(material => new THREE.MeshLambertMaterial({
+      map: material.map, color: material.map ? 0xffffff : material.color,
+      transparent: material.transparent, opacity: material.opacity, side: material.side,
+    }));
+    sunlit.set(object, lit);
+  });
+  const glass = site && new THREE.Mesh(
+    new THREE.PlaneGeometry(site.window.width, site.window.height),
+    new THREE.MeshBasicMaterial({color: 0xffd27a, transparent: true, opacity: .28, side: THREE.DoubleSide, depthWrite: false}));
+  if (glass) {
+    glass.position.set(site.window.center.x, site.window.sill + site.window.height / 2, site.window.center.z);
+    glass.rotation.y = Math.PI / 2;
+    glass.visible = false;
+    scene.add(glass);
+  }
+  scene.add(marks, fill, sunLight, sunTarget);
   showMarks.checked = false;
   let aligned = captured && room.matterpakAlignmentVerified === true;
   checkScan.disabled = !aligned;
@@ -384,6 +412,55 @@ function mount(THREE, room, mesh, textures, release, captured = false) {
     document.querySelector("#height-value").textContent = height.value + " m";
     document.querySelector("#focal").textContent = focal + " mm";
     document.querySelector("#distance").textContent = Number(travel.value).toFixed(2) + " m";
+    applySun();
+  }
+
+  let sunApplied = false;
+  function applySun() {
+    if (!sunPreview || !sunStatus) return;
+    const hour = Number(sunHour.value);
+    const heading = Number(sunHeading.value);
+    const clockHour = Math.floor(hour);
+    const minutes = Math.round((hour - clockHour) * 60);
+    if (sunHour.nextElementSibling) sunHour.nextElementSibling.textContent =
+      String(clockHour).padStart(2, "0") + ":" + String(minutes).padStart(2, "0");
+    if (sunHeading.nextElementSibling) sunHeading.nextElementSibling.textContent = heading + "°";
+    if (!site) {
+      sunStatus.textContent = "This room has no saved location, so the sun stays off.";
+      return;
+    }
+    const light = sunlight({
+      latitude: site.latitude, longitude: site.longitude,
+      year: site.year, month: site.month, day: site.day,
+      hour, heading, outward: site.window.outward,
+    });
+    const enabled = sunPreview.checked;
+    if (enabled !== sunApplied) {
+      sunApplied = enabled;
+      mesh.traverse(object => {
+        const lit = sunlit.get(object);
+        if (!lit) return;
+        if (!object.userData.photographed) object.userData.photographed = object.material;
+        object.material = enabled ? (lit.length === 1 ? lit[0] : lit) : object.userData.photographed;
+      });
+      fill.intensity = enabled ? .45 : 2.3;
+      if (glass) glass.visible = enabled;
+    }
+    if (!enabled) {
+      sunLight.intensity = 0;
+      sunStatus.textContent = "Photographed lighting. Turn on the sun study to move the hour.";
+      return;
+    }
+    const {x, y, z} = light.direction;
+    sunLight.intensity = light.gain * 3.2;
+    sunLight.position.set(site.window.center.x + x * 8, 1.4 + y * 8, site.window.center.z + z * 8);
+    sunTarget.position.set(site.window.center.x + 1, 1.4, site.window.center.z);
+    const when = light.elevation > 0
+      ? Math.round(light.elevation) + "° up at " + Math.round(light.azimuth) + "° compass"
+      : "below the horizon";
+    sunStatus.textContent = "10 Apr 2025, sun " + when + ". " + (light.gain > 0
+      ? "It faces the glass."
+      : "The glass faces away from it.");
   }
 
   function stop() {
@@ -710,6 +787,10 @@ function mount(THREE, room, mesh, textures, release, captured = false) {
   }, options);
   keepMark.addEventListener("change", save, options);
   checkScan.addEventListener("change", save, options);
+  for (const input of [sunPreview, sunHour, sunHeading].filter(Boolean)) input.addEventListener("input", () => {
+    stop();
+    render();
+  }, options);
   for (const input of [lens, travel, sensor, height, rig]) input.addEventListener("input", () => {
     checkedTravel = undefined;
     revision.textContent = "";
@@ -740,6 +821,11 @@ function mount(THREE, room, mesh, textures, release, captured = false) {
     release();
     outline.geometry.dispose();
     outline.material.dispose();
+    for (const materials of sunlit.values()) for (const material of materials) material.dispose();
+    if (glass) {
+      glass.geometry.dispose();
+      glass.material.dispose();
+    }
     for (const object of marks.children) object.geometry.dispose();
     for (const material of new Set(marks.children.map(object => object.material))) material.dispose();
     renderer.dispose();

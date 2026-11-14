@@ -160,6 +160,10 @@ select {max-width:100%} canvas {width:100%;display:block;margin-top:12px;backgro
 <label>Camera height <input id="camera-height" type="range" min=".15" max="4" step=".01"><output id="height-value"></output></label>
 <label>Rig radius <input id="rig-radius" type="range" min=".05" max="1.5" step=".01"><output id="rig-value"></output></label>
 <label>Lens <input id="lens" type="range" min="15" max="150" value="35"><output id="focal">35 mm</output></label>
+<label><input type="checkbox" id="sun-preview"> Sun study</label>
+<label>Hour on 10 Apr <input id="sun-hour" type="range" min="5" max="21" step=".25" value="16"><output>16:00</output></label>
+<label>Plan +Z heading <input id="sun-heading" type="range" min="0" max="359" step="1" value="0"><output>0°</output></label>
+<p id="sun-status" role="status"></p>
 <label>Travel <input id="travel" type="range" min="0" max="4" step="any" value=".7"><output id="distance">0.70 m</output></label>
 </div><p id="clearance" role="status"></p><p id="ceiling" role="status"></p><p id="framing" role="status"></p><p id="sightline" role="status"></p>
 <div id="sightline-actions" hidden>
