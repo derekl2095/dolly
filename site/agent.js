@@ -4,6 +4,7 @@ import {compareCapturedRooms} from "./compare.js";
 const definitions = [
   ["search_locations", "Search CoStar for properties including leads with no linked scan. Set importedOnly when you need rooms ready for geometry checks.", {query: {type: "string"}, city: {type: ["string", "null"]}, category: {type: ["string", "null"]}, importedOnly: {type: "boolean"}}],
   ["inspect_location", "Check whether a linked model has imported rooms.", {model: {type: "string"}}],
+  ["import_capture_outline", "Fetch room geometry for a discovered Matterport scan when authorized.", {model: {type: "string"}}],
   ["get_room_evidence", "Read a room's imported dimensions and staging evidence.",
     {model: {type: "string"}, room: {type: ["string", "null"]}}],
   ["evaluate_shot", "Test a lens and camera move in an inspected room. Returns a candidate ID.",
@@ -30,7 +31,7 @@ async function request(path, options) {
   return data;
 }
 
-export async function runAgent(brief, {activity, apply, lockedLens, allowApply, current, revise, lockedRoom, requireSightlines = false, minimumTravel = 0, shortlist = null, currentModel, catalogFilters = {}, onEvidence = () => {}, api = request}) {
+export async function runAgent(brief, {activity, apply, lockedLens, allowApply, current, revise, lockedRoom, requireSightlines = false, minimumTravel = 0, shortlist = null, currentModel, catalogFilters = {}, onEvidence = () => {}, allowImport = false, api = request}) {
   if (!Number.isFinite(minimumTravel) || minimumTravel < 0 || minimumTravel > 4)
     throw Error("Minimum travel must be between 0 and 4 m.");
   if (shortlist && !shortlist.length) throw Error("Shortlist a scan before limiting the agent to the shortlist.");
@@ -38,6 +39,8 @@ export async function runAgent(brief, {activity, apply, lockedLens, allowApply, 
   const seen = new Set(scope), rooms = new Map(), candidates = new Map();
   const leads = new Map();
   const inspected = new Map();
+  const importAttempts = new Set();
+  const availableTools = allowImport ? tools : tools.filter(tool => tool.function.name !== "import_capture_outline");
   function candidateReports() {
     const rank = {qualifies: 0, fallback: 1, failed: 2};
     return [...candidates.values()].map(({room, setup, report}) => {
@@ -72,6 +75,7 @@ export async function runAgent(brief, {activity, apply, lockedLens, allowApply, 
       ? `Catalog filters are fixed for this run: ${JSON.stringify(catalogFilters)}.` : "",
     "Use exact city for hard geography constraints. Supported category strings include office, industrial warehouse, flex, retail, hotel hospitality, apartment multifamily, and land. Send null when a filter is flexible.",
     "For a follow-up about the open shot, prefer revise_current_shot. Use null for values the user wants to preserve.",
+    allowImport ? "If a promising scan lacks imported rooms, you may fetch its outlines. Inspect the scan before and after importing." : "",
     requireSightlines ? "Every applied candidate must pass sampled captured sightlines." : "",
     minimumTravel > 0 ? `Minimum travel is ${minimumTravel} m. A shorter fallback may be reported but cannot be applied.` : "",
     lockedRoom ? "The current room is locked. Any applied proposal must be an in-place revision." : "",
@@ -120,6 +124,20 @@ export async function runAgent(brief, {activity, apply, lockedLens, allowApply, 
         inspected.set(args.model, list.length);
         activity(`Scan ${args.model} has ${list.length} imported rooms.`);
         return list.slice(0, 12);
+      }
+      case "import_capture_outline": {
+        if (!allowImport) throw Error("Room imports are disabled for this investigation.");
+        if (inspected.get(args.model) !== 0 || !seen.has(args.model))
+          throw Error("Inspect a discovered scan with no imported rooms first.");
+        if (importAttempts.has(args.model) || importAttempts.size >= 2)
+          throw Error("Use at most two distinct scan imports per investigation.");
+        importAttempts.add(args.model);
+        activity(`Importing room outlines for scan ${args.model}.`);
+        const result = await api("/api/import-room", {
+          method: "POST", headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({model: args.model}),
+        });
+        return result;
       }
       case "get_room_evidence": {
         if (!seen.has(args.model)) throw Error("Search for this model first.");
@@ -199,7 +217,7 @@ export async function runAgent(brief, {activity, apply, lockedLens, allowApply, 
   for (let round = 0; round < 8; round++) {
     const response = await api("/api/agent-turn", {
       method: "POST", headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({messages, tools}),
+      body: JSON.stringify({messages, tools: availableTools}),
     });
     const calls = response.tool_calls || [];
     if (!calls.length) {

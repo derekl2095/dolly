@@ -120,3 +120,30 @@ test("a brief searches the catalog and opens the exact setup checked by the room
   assert.deepEqual(opened.setup.actors, room.actors);
   assert.deepEqual(evidence.unverifiedLeads.map(lead => lead.id), [3]);
 });
+
+test("the agent imports only an inspected scan with explicit permission", async () => {
+  for (const allowImport of [false, true]) {
+    let imports = 0;
+    const call = (name, id) => ({id, function: {name, arguments: '{"model":"TestScan"}'}});
+    const turns = [
+      {tool_calls: [call("import_capture_outline", "early"), call("inspect_location", "inspect")]},
+      {tool_calls: [call("import_capture_outline", "allowed"), call("import_capture_outline", "retry")]},
+      {content: "Done"},
+    ];
+    await runAgent("Scout the shortlisted property", {
+      shortlist: [{modelId: "TestScan"}], allowImport, activity() {},
+      async api(path, options) {
+        if (path.startsWith("/api/rooms?")) return [];
+        if (path === "/api/import-room") {
+          assert.deepEqual(JSON.parse(options.body), {model: "TestScan"});
+          imports++;
+          return {imported: 1};
+        }
+        const {tools} = JSON.parse(options.body);
+        assert.equal(tools.some(tool => tool.function.name === "import_capture_outline"), allowImport);
+        return turns.shift();
+      },
+    });
+    assert.equal(imports, Number(allowImport));
+  }
+});

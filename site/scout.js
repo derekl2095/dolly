@@ -636,6 +636,7 @@ function agentSettings() {
 
 function setAgentSettings(settings = {}) {
   clearBriefReview();
+  agentForm.elements["import-outlines"].checked = false;
   agentForm.elements.brief.value = settings.brief ?? "";
   agentForm.elements.lens.value = settings.lens ?? "";
   agentForm.elements["minimum-travel"].value = settings.minimumTravel ?? "";
@@ -828,6 +829,7 @@ function scoutingConstraints() {
     lockedLens: inputs.get("lens") ? Number(inputs.get("lens")) : null,
     minimumTravel: Number(inputs.get("minimum-travel")),
     allowApply: inputs.has("apply"),
+    allowImport: inputs.has("import-outlines"),
     requireSightlines: inputs.has("require-sightlines"),
     shortlist: shortlisted ? shortlist.slice() : null,
     lockedRoom: lockRoom,
@@ -868,6 +870,7 @@ document.querySelector("#review-brief").addEventListener("click", () => {
       : "Locked lens: " + constraints.lockedLens + " mm.",
     "Minimum travel: " + constraints.minimumTravel + " m.",
     constraints.requireSightlines ? "Captured sightlines required." : "Captured sightlines optional.",
+    constraints.allowImport ? "Matterport outline imports allowed for this run." : "",
     constraints.allowApply ? "Open a qualifying proposal automatically." : "Report proposals only.",
   ];
   if (!constraints.shortlist && !city && !category) lines[0] = "Catalog city and property type are flexible.";
