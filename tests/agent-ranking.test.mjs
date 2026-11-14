@@ -253,3 +253,41 @@ test("shortlist-only runs retain scans with missing room evidence", async () => 
   });
   assert.deepEqual(evidence.unverifiedLeads.map(lead => lead.scans[0].model), ["Missing"]);
 });
+
+test("missing mesh alignment cannot be bypassed by an agent retry", async () => {
+  const room = {
+    modelId: "OutlineOnly", outline: [[-3, -6], [3, -6], [3, 6], [-3, 6]],
+    camera: [0, 4], lookAt: [0, 0], actors: [[-.5, 0], [.5, 0]], slideAxis: [1, 0],
+  };
+  const call = (name, args, id = name) => ({id, function: {name, arguments: JSON.stringify(args)}});
+  const evaluate = (lens, id) => call("evaluate_shot", {
+    model: room.modelId, room: null, lens, slide: .7, move: "slide", requireSightlines: false,
+  }, id);
+  let round = 0;
+  let evidence;
+  let alternatives;
+  await runAgent("Find a two-shot with verified sightlines", {
+    shortlist: [{modelId: room.modelId}], requireSightlines: true, allowApply: true,
+    activity() {},
+    onEvidence(value) { evidence = value; },
+    onAlternatives(value) { alternatives = value; },
+    apply() { assert.fail("An unaligned scan cannot pass the required sightline check"); },
+    async api(path, options) {
+      if (path.startsWith("/api/room?")) return room;
+      assert.equal(path, "/api/agent-turn");
+      if (round++ === 0) return {tool_calls: [
+        call("get_room_evidence", {model: room.modelId, room: null}),
+        evaluate(35, "first"), evaluate(28, "retry"),
+      ]};
+      if (round === 2) return {tool_calls: [call("apply_shot", {candidate: "shot-2"})]};
+      const result = JSON.parse(JSON.parse(options.body).messages.at(-1).content);
+      assert.match(result.error, /passed the available checks/);
+      return {content: "No qualifying setup."};
+    },
+  });
+  assert.equal(evidence.candidates.length, 2);
+  assert.ok(evidence.candidates.every(candidate => candidate.status === "failed" &&
+    /alignment unverified/i.test(candidate.outcome)));
+  assert.equal(evidence.recommended, undefined);
+  assert.deepEqual(alternatives, []);
+});
