@@ -630,7 +630,7 @@ async function restoreSelection(selection) {
 
 function agentSettings() {
   const inputs = new FormData(agentForm);
-  return {brief: inputs.get("brief"), lens: inputs.get("lens"), lockedMove: inputs.get("locked-move"), minimumTravel: inputs.get("minimum-travel"),
+  return {brief: inputs.get("brief"), lens: inputs.get("lens"), lockedMove: inputs.get("locked-move"), targetTravel: inputs.get("target-travel"), minimumTravel: inputs.get("minimum-travel"),
     shortlistOnly: inputs.has("shortlist-only"), lockRoom: inputs.has("lock-room"), requireSightlines: inputs.has("require-sightlines"), apply: inputs.has("apply")};
 }
 
@@ -640,6 +640,7 @@ function setAgentSettings(settings = {}) {
   agentForm.elements.brief.value = settings.brief ?? "";
   agentForm.elements.lens.value = settings.lens ?? "";
   agentForm.elements["locked-move"].value = settings.lockedMove ?? "";
+  agentForm.elements["target-travel"].value = settings.targetTravel ?? "";
   agentForm.elements["minimum-travel"].value = settings.minimumTravel ?? "";
   agentForm.elements["shortlist-only"].checked = settings.shortlistOnly === true;
   agentForm.elements["lock-room"].checked = settings.lockRoom === true;
@@ -829,6 +830,7 @@ function scoutingConstraints() {
     brief: inputs.get("brief").trim(),
     lockedMove: inputs.get("locked-move") || null,
     lockedLens: inputs.get("lens") ? Number(inputs.get("lens")) : null,
+    targetTravel: inputs.get("target-travel") === "" ? null : Number(inputs.get("target-travel")),
     minimumTravel: Number(inputs.get("minimum-travel")),
     allowApply: inputs.has("apply"),
     allowImport: inputs.has("import-outlines"),
@@ -863,8 +865,12 @@ document.querySelector("#review-brief").addEventListener("click", () => {
       : "Shortlist a scan before using shortlist-only scouting.";
     return;
   }
-  if (constraints.lockedMove === "static" && constraints.minimumTravel > 0) {
-    agentResult.textContent = "Set minimum travel to zero for a static shot.";
+  if (constraints.lockedMove === "static" && (constraints.minimumTravel > 0 || constraints.targetTravel > 0)) {
+    agentResult.textContent = "Use zero travel for a static shot.";
+    return;
+  }
+  if (constraints.targetTravel !== null && constraints.targetTravel < constraints.minimumTravel) {
+    agentResult.textContent = "Preferred travel must be at least the minimum.";
     return;
   }
   const {city, category} = constraints.catalogFilters;
@@ -875,6 +881,7 @@ document.querySelector("#review-brief").addEventListener("click", () => {
     constraints.lockedLens === null ? "Lens: use brief as guidance or lock a lens above."
       : "Locked lens: " + constraints.lockedLens + " mm.",
     constraints.lockedMove ? "Locked camera move: " + agentForm.elements["locked-move"].selectedOptions[0].textContent : "",
+    constraints.targetTravel === null ? "" : "Preferred travel: " + constraints.targetTravel + " m.",
     "Minimum travel: " + constraints.minimumTravel + " m.",
     constraints.requireSightlines ? "Captured sightlines required." : "Captured sightlines optional.",
     constraints.allowImport ? "Matterport outline imports allowed for this run." : "",

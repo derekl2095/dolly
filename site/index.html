@@ -85,6 +85,7 @@ select {max-width:100%} canvas {width:100%;display:block;margin-top:12px;backgro
 <label>Shot brief <input name="brief" maxlength="1200" required placeholder="A 35 mm two-shot in a Houston office"></label>
 <label>Lock lens (mm) <input name="lens" type="number" min="15" max="150" placeholder="Optional"></label>
 <label>Lock camera move <select name="locked-move"><option value="">Flexible</option><option value="slide">Lateral slide</option><option value="push">Push-in</option><option value="pull">Pull-back</option><option value="static">Static</option></select></label>
+<label>Preferred travel (m) <input name="target-travel" type="number" min="0" max="4" step="any" placeholder="Optional"></label>
 <label>Minimum travel (m) <input name="minimum-travel" type="number" min="0" max="4" step="any" placeholder="Optional"></label>
 <label><input name="require-sightlines" type="checkbox"> Require captured sightlines for agent proposals</label>
 <label><input name="shortlist-only" type="checkbox"> Scout shortlisted scans only</label>

@@ -169,3 +169,24 @@ test("a locked pull-back cannot be substituted with a static fallback", async ()
   assert.equal(evidence.queued, undefined);
   assert.deepEqual(evidence.candidates[0].unmet, ["Camera move lock"]);
 });
+
+test("shorter retries share the crew's travel target", async () => {
+  let evidence;
+  const turns = [
+    {tool_calls: [.25, 1].map(slide => ({
+      id: String(slide),
+      function: {name: "revise_current_shot", arguments: JSON.stringify({slide, objective: "travel"})},
+    }))},
+    {content: "Compared travel."},
+  ];
+  await runAgent("Aim for a 1 m slide", {
+    targetTravel: 1, current: {lens: 35, travel: 1},
+    activity() {}, onEvidence(value) { evidence = value; },
+    revise({distance}) {
+      return {setup: {travel: distance === 1 ? .9 : .25}, reason: "Checked", clearanceMargin: 1 - distance};
+    },
+    async api() { return turns.shift(); },
+  });
+  assert.equal(evidence.recommended, "shot-2");
+  assert.equal(evidence.candidates[1].travelDifference, .75);
+});

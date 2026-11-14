@@ -31,10 +31,12 @@ async function request(path, options) {
   return data;
 }
 
-export async function runAgent(brief, {activity, apply, lockedLens = null, lockedMove = null, allowApply, current, revise, lockedRoom, requireSightlines = false, minimumTravel = 0, shortlist = null, currentModel, catalogFilters = {}, onEvidence = () => {}, allowImport = false, api = request}) {
+export async function runAgent(brief, {activity, apply, lockedLens = null, lockedMove = null, allowApply, current, revise, lockedRoom, requireSightlines = false, minimumTravel = 0, targetTravel = null, shortlist = null, currentModel, catalogFilters = {}, onEvidence = () => {}, allowImport = false, api = request}) {
   if (lockedMove !== null && !["slide", "push", "pull", "static"].includes(lockedMove))
     throw Error("Unsupported camera move lock.");
-  if (lockedMove === "static" && minimumTravel > 0)
+  if (targetTravel !== null && (!Number.isFinite(targetTravel) || targetTravel < minimumTravel || targetTravel > 4))
+    throw Error("Target travel must be between the minimum and 4 m.");
+  if (lockedMove === "static" && (minimumTravel > 0 || targetTravel > 0))
     throw Error("Static shots require a zero minimum travel.");
   if (!Number.isFinite(minimumTravel) || minimumTravel < 0 || minimumTravel > 4)
     throw Error("Minimum travel must be between 0 and 4 m.");
@@ -56,9 +58,10 @@ export async function runAgent(brief, {activity, apply, lockedLens = null, locke
       if (setup && lockedRoom && room) unmet.push("Current room lock");
       const status = !setup ? "failed" : unmet.length ? "fallback" : "qualifies";
       return {...report, status, unmet,
-        travelShortfall: setup ? Math.max(0, report.requested - setup.travel) : null};
+        travelDifference: setup ? (targetTravel === null
+          ? Math.max(0, report.requested - setup.travel) : Math.abs(targetTravel - setup.travel)) : null};
     }).sort((a, b) => rank[a.status] - rank[b.status] ||
-      (a.travelShortfall ?? Infinity) - (b.travelShortfall ?? Infinity) ||
+      (a.travelDifference ?? Infinity) - (b.travelDifference ?? Infinity) ||
       Number(Boolean(b.sightlinesSampled)) - Number(Boolean(a.sightlinesSampled)) ||
       (b.clearanceMargin ?? -Infinity) - (a.clearanceMargin ?? -Infinity) ||
       (b.framingMargin ?? -Infinity) - (a.framingMargin ?? -Infinity));
@@ -83,11 +86,12 @@ export async function runAgent(brief, {activity, apply, lockedLens = null, locke
     "For a follow-up about the open shot, prefer revise_current_shot. Use null for values the user wants to preserve.",
     allowImport ? "If a promising scan lacks imported rooms, you may fetch its outlines. Inspect the scan before and after importing." : "",
     requireSightlines ? "Every applied candidate must pass sampled captured sightlines." : "",
+    targetTravel !== null ? `The crew prefers ${targetTravel} m of travel. Rank retries against that same target.` : "",
     minimumTravel > 0 ? `Minimum travel is ${minimumTravel} m. A shorter fallback may be reported but cannot be applied.` : "",
     lockedRoom ? "The current room is locked. Any applied proposal must be an in-place revision." : "",
     current ? `Open editor: ${JSON.stringify(current)}.` : "There is no open shot.",
     "New-room comparisons check walls, marked furniture and sampled framing, with optional sampled sightlines against aligned scans. Current-room revisions also check marked furniture and require sampled mesh sightlines when the editor enables that option.",
-    "compare_setups ranks by constraint compliance, requested travel shortfall, sampled sightlines, rig clearance, and framing margin. Explain any choice that differs from that technical ranking using the crew’s stated preferences.",
+    "compare_setups ranks by constraint compliance, distance from the crew’s target travel when set, otherwise requested travel shortfall, sampled sightlines, rig clearance, and framing margin. Explain any choice that differs from that technical ranking using the crew’s stated preferences.",
     "Use rejection counts to select the next test. For framing failures, try another allowed lens or room. For sightline failures, consider shorter travel or another room. Treat a short or static fallback as a tradeoff and report its actual travel.",
     "Preserve the user's creative intent. apply_shot queues a proposal. The editor opens it after you finish. Describe it as queued.",
     allowApply ? "Queue a qualifying proposal to honor the crew’s preferences. If you finish without queuing one, the top qualifying technical match opens automatically." : "Compare only. Applying is disabled.",
