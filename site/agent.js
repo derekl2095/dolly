@@ -264,12 +264,25 @@ export async function runAgent(brief, {activity, apply, lockedLens = null, locke
       }));
   }
 
+  function finishIncomplete(reason) {
+    proposal = undefined;
+    publishEvidence();
+    publishAlternatives();
+    return reason + " The active shot was kept." +
+      (candidates.size ? " Review any checked setups below." : "");
+  }
+
   publishEvidence();
   for (let round = 0; round < 8; round++) {
-    const response = await api("/api/agent-turn", {
-      method: "POST", headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({messages, tools: availableTools}),
-    });
+    let response;
+    try {
+      response = await api("/api/agent-turn", {
+        method: "POST", headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({messages, tools: availableTools}),
+      });
+    } catch (error) {
+      return finishIncomplete(error.message);
+    }
     const calls = response.tool_calls || [];
     if (!calls.length) {
       const automatic = allowApply && !proposal;
@@ -286,7 +299,7 @@ export async function runAgent(brief, {activity, apply, lockedLens = null, locke
       const summary = response.content || "The investigation finished.";
       return automatic && proposal ? summary + ` Opened ${proposal.report.id}, the top qualifying technical match.` : summary;
     }
-    if (calls.length > 4) throw Error("The model requested too many tools at once.");
+    if (calls.length > 4) return finishIncomplete("The model requested too many tools at once.");
     messages.push({role: "assistant", content: response.content ?? null, tool_calls: calls});
     for (const call of calls) {
       let result;
@@ -300,8 +313,5 @@ export async function runAgent(brief, {activity, apply, lockedLens = null, locke
       messages.push({role: "tool", tool_call_id: call.id, content: JSON.stringify(result)});
     }
   }
-  proposal = undefined;
-  publishEvidence();
-  publishAlternatives();
-  return "The agent reached its search limit. The active shot was kept. Review any checked setups below.";
+  return finishIncomplete("The agent reached its search limit.");
 }

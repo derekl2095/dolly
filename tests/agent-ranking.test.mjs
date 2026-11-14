@@ -291,3 +291,26 @@ test("missing mesh alignment cannot be bypassed by an agent retry", async () => 
   assert.equal(evidence.recommended, undefined);
   assert.deepEqual(alternatives, []);
 });
+
+test("a provider failure clears an unapplied proposal and keeps the active shot", async () => {
+  let round = 0;
+  let evidence;
+  const call = (name, args) => ({id: name, function: {name, arguments: JSON.stringify(args)}});
+  const summary = await runAgent("Check my current shot", {
+    current: {lens: 35, travel: 1}, allowApply: true,
+    activity() {},
+    onEvidence(value) { evidence = value; },
+    revise() { return {setup: {travel: 1}, reason: "Checked"}; },
+    apply() { assert.fail("An incomplete run must keep the active shot"); },
+    async api() {
+      if (round++ === 0) return {tool_calls: [
+        call("revise_current_shot", {objective: "travel"}), call("apply_shot", {candidate: "shot-1"}),
+      ]};
+      assert.equal(evidence.queued, "shot-1");
+      throw Error("The provider did not respond.");
+    },
+  });
+  assert.match(summary, /provider did not respond.*active shot was kept/i);
+  assert.equal(evidence.queued, undefined);
+  assert.equal(evidence.recommended, "shot-1");
+});
