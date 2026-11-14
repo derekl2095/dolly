@@ -21,6 +21,11 @@ export function writeProject(project, storage = localStorage) {
   return saved;
 }
 
+export function deleteProject(id, storage = localStorage) {
+  const projects = readProjects(storage);
+  storage.setItem(storageKey, JSON.stringify(projects.filter(project => project.id !== id)));
+}
+
 export function parseProjectArchive(text) {
   const {version, project} = JSON.parse(text);
   const isObject = value => value && typeof value === "object" && !Array.isArray(value);
@@ -41,7 +46,7 @@ export function parseProjectArchive(text) {
     if (selection == null) return true;
     if (!isObject(selection) || !/^[A-Za-z0-9]{1,40}$/.test(selection.modelId || "") ||
         (selection.roomId != null && !/^[A-Za-z0-9_-]{1,128}$/.test(selection.roomId)) ||
-        (selection.label != null && !isText(selection.label, 500))) return false;
+        !optionalText(selection.label, 500) || !optionalText(selection.location, 1000)) return false;
     const shot = selection.shot;
     return shot == null || (isObject(shot) && point(shot.mark) && point(shot.aim) &&
       (shot.axis == null || point(shot.axis)) &&
