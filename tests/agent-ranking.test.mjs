@@ -62,7 +62,7 @@ test("agent opens a ranked candidate when authorized and the model skips selecti
   }
 });
 
-test("a brief searches the catalog and offers the exact setup checked by the room solver", async () => {
+test("a brief searches the catalog and keeps the exact checked setup available at the search limit", async () => {
   const room = {
     modelId: "Wide", roomId: "showroom", label: "Wide showroom", height: 3,
     outline: [[-3,-6],[3,-6],[3,6],[-3,6]], camera: [0,4], lookAt: [0,0],
@@ -75,7 +75,7 @@ test("a brief searches the catalog and offers the exact setup checked by the roo
   let round = 0;
   let alternatives;
   let evidence;
-  await runAgent("Houston office, 35 mm lateral slide", {
+  const summary = await runAgent("Houston office, 35 mm lateral slide", {
     lockedLens: 35, allowApply: false, minimumTravel: .7,
     catalogFilters: {city: "Houston", category: "office"}, activity() {},
     onEvidence(value) { evidence = value; },
@@ -105,13 +105,16 @@ test("a brief searches the catalog and offers the exact setup checked by the roo
           assert.equal(last().travel, null);
           assert.ok(last().evaluation.clearanceRejected > 0);
           return {tool_calls: [call("get_room_evidence", {model: "Wide", room: "showroom"}), evaluate("Wide")]};
-        default:
+        case 3:
           assert.ok(Math.abs(last().travel - .7) < 1e-9);
           assert.ok(last().framingMargin > 0);
-          return {content: "Wide showroom passed the required checks."};
+          return {tool_calls: [call("compare_setups", {}, "rank-" + round)]};
+        default:
+          return {tool_calls: [call("compare_setups", {}, "rank-" + round)]};
       }
     },
   });
+  assert.match(summary, /search limit/);
   assert.equal(alternatives.length, 1);
   const [opened] = alternatives;
   assert.equal(opened.room.modelId, "Wide");

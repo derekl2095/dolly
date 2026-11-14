@@ -256,6 +256,14 @@ export async function runAgent(brief, {activity, apply, lockedLens = null, locke
     }
   }
 
+  function publishAlternatives() {
+    onAlternatives(candidateReports().flatMap(report => {
+      const item = candidates.get(report.id);
+      return report.status === "qualifies" && item.room && item !== proposal
+        ? [{id: report.id, room: item.room, setup: item.setup}] : [];
+      }));
+  }
+
   publishEvidence();
   for (let round = 0; round < 8; round++) {
     const response = await api("/api/agent-turn", {
@@ -274,11 +282,7 @@ export async function runAgent(brief, {activity, apply, lockedLens = null, locke
         publishEvidence();
         activity(`Opened ${proposal.report.id} in the editor${automatic ? " as the top technical match" : ""}.`);
       }
-      onAlternatives(candidateReports().flatMap(report => {
-        const item = candidates.get(report.id);
-        return report.status === "qualifies" && item.room && item !== proposal
-          ? [{id: report.id, room: item.room, setup: item.setup}] : [];
-      }));
+      publishAlternatives();
       const summary = response.content || "The investigation finished.";
       return automatic && proposal ? summary + ` Opened ${proposal.report.id}, the top qualifying technical match.` : summary;
     }
@@ -296,5 +300,8 @@ export async function runAgent(brief, {activity, apply, lockedLens = null, locke
       messages.push({role: "tool", tool_call_id: call.id, content: JSON.stringify(result)});
     }
   }
-  throw Error("The agent reached its search limit. The active shot was kept.");
+  proposal = undefined;
+  publishEvidence();
+  publishAlternatives();
+  return "The agent reached its search limit. The active shot was kept. Review any checked setups below.";
 }
