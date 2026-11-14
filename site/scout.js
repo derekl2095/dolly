@@ -1,7 +1,7 @@
 import {readShotExport} from "./path.js";
 import {parseProjectArchive, projectArchiveMaxBytes, readProjects, writeProject} from "./projects.js";
 import {loadObstacles, outlineMeasurements, roomKey} from "./room-state.js";
-import {runAgent} from "./agent.js";
+import {briefSuggestions, runAgent} from "./agent.js";
 import {compareCapturedRooms} from "./compare.js";
 import {openMesh, closeMesh, currentShot, planCurrentShot, applyCurrentShot} from "./mesh.js";
 
@@ -456,30 +456,54 @@ function renderRoom(room) {
     " m² outline area · " + room.modelId;
 }
 
-form.addEventListener("submit", async event => {
-  event.preventDefault();
-  const filters = new URLSearchParams(new FormData(form));
-  if (![...filters.values()].some(value => value.trim())) {
-    status.textContent = "Enter a search term or select a filter.";
-    return;
-  }
+const moreLocations = document.querySelector("#more-locations");
+let nextLocationPage;
+let searchRequest;
+
+function resetLocationSearch() {
+  searchRequest?.abort();
+  nextLocationPage = undefined;
+  moreLocations.hidden = true;
+  results.replaceChildren();
+}
+
+async function loadLocationPage(filters) {
+  searchRequest?.abort();
+  const request = new AbortController();
+  searchRequest = request;
   const button = form.querySelector("button");
-  button.disabled = true;
+  button.disabled = moreLocations.disabled = true;
   status.textContent = "Searching the local catalog…";
   try {
-    const response = await fetch("/api/locations?" + filters);
+    const response = await fetch("/api/locations?" + filters, {signal: request.signal});
     const data = await response.json();
+    if (request.signal.aborted) return;
     if (!response.ok) throw new Error(data.error || "Search API failed");
-    const {rows, mode, scanReadiness} = data;
-    results.replaceChildren(...rows.map(row => card(row, scanReadiness)));
+    const {rows, mode, scanReadiness, next_offset: offset} = data;
+    results.append(...rows.map(row => card(row, scanReadiness)));
+    nextLocationPage = undefined;
+    if (Number.isSafeInteger(offset) && offset > Number(filters.get("offset") ?? 0)) {
+      nextLocationPage = new URLSearchParams(filters);
+      nextLocationPage.set("offset", String(offset));
+    }
+    moreLocations.hidden = !nextLocationPage;
+    const count = results.children.length;
     const coverage = mode === "addresses" ? " · CoStar addresses and scan links only" : "";
-    status.textContent = (rows.length ? rows.length + " property matches shown" : "No matching properties.") + coverage;
+    status.textContent = (count ? count + " property matches shown" : "No matching properties.") + coverage;
   } catch (error) {
-    results.replaceChildren();
-    status.textContent = error.message;
+    if (!request.signal.aborted) status.textContent = error.message;
   } finally {
-    button.disabled = false;
+    if (searchRequest === request) button.disabled = moreLocations.disabled = false;
   }
+}
+
+form.addEventListener("submit", event => {
+  event.preventDefault();
+  resetLocationSearch();
+  void loadLocationPage(new URLSearchParams(new FormData(form)));
+});
+moreLocations.addEventListener("click", () => {
+  if (nextLocationPage) void loadLocationPage(nextLocationPage);
 });
 
 const restore = new URLSearchParams(location.search);
@@ -555,6 +579,7 @@ comparison.addEventListener("submit", async event => {
 
 const agentForm = document.querySelector("#agent-form");
 const agentResult = document.querySelector("#agent-result");
+const agentEvidence = document.querySelector("#agent-evidence");
 const agentActivity = document.querySelector("#agent-activity");
 const projectForm = document.querySelector("#project-form");
 const projectList = document.querySelector("#project-list");
@@ -627,15 +652,34 @@ async function restoreSelection(selection) {
   return true;
 }
 
+async function openCheckedProposal(room, setup) {
+  const previous = selectionSnapshot();
+  const opening = inspectRoom({name: room.label || room.modelId}, room.modelId, room.roomId, setup);
+  const request = roomRequest;
+  const opened = await opening;
+  if (request !== roomRequest || request.signal.aborted)
+    throw Error("The room changed while the proposal was opening. Your selection was kept.");
+  const missingSightlines = opened && setup.requireSightlines && document.querySelector("#check-scan").disabled;
+  if (!opened || missingSightlines) {
+    await restoreSelection(previous);
+    throw Error(missingSightlines ? "The proposal requires an aligned MatterPak, which the editor could not load."
+      : "Could not open the proposed shot.");
+  }
+}
+
 function agentSettings() {
   const inputs = new FormData(agentForm);
-  return {brief: inputs.get("brief"), lens: inputs.get("lens"), minimumTravel: inputs.get("minimum-travel"),
+  return {brief: inputs.get("brief"), lens: inputs.get("lens"), lockedMove: inputs.get("locked-move"), targetTravel: inputs.get("target-travel"), minimumTravel: inputs.get("minimum-travel"),
     shortlistOnly: inputs.has("shortlist-only"), lockRoom: inputs.has("lock-room"), requireSightlines: inputs.has("require-sightlines"), apply: inputs.has("apply")};
 }
 
 function setAgentSettings(settings = {}) {
+  clearBriefReview();
+  agentForm.elements["import-outlines"].checked = false;
   agentForm.elements.brief.value = settings.brief ?? "";
   agentForm.elements.lens.value = settings.lens ?? "";
+  agentForm.elements["locked-move"].value = settings.lockedMove ?? "";
+  agentForm.elements["target-travel"].value = settings.targetTravel ?? "";
   agentForm.elements["minimum-travel"].value = settings.minimumTravel ?? "";
   agentForm.elements["shortlist-only"].checked = settings.shortlistOnly === true;
   agentForm.elements["lock-room"].checked = settings.lockRoom === true;
@@ -676,10 +720,11 @@ document.querySelector("#new-project").addEventListener("click", () => {
   undoAgent.hidden = true;
   setAgentSettings();
   renderHistory();
+  agentEvidence.replaceChildren();
   agentActivity.replaceChildren();
   agentResult.textContent = "";
   form.reset();
-  results.replaceChildren();
+  resetLocationSearch();
   status.textContent = "";
   void restoreSelection(null);
   projectStatus.textContent = "New project. Save it to keep the brief and selected shot.";
@@ -702,9 +747,10 @@ async function openSavedProject(id) {
     form.elements.category.value = project.filters?.category || "";
     form.elements.linked.checked = project.filters?.linked === true;
     form.elements.imported.checked = project.filters?.imported === true;
-    results.replaceChildren();
+    resetLocationSearch();
     status.textContent = "";
     if (project.query?.trim() || project.filters?.city || project.filters?.category || project.filters?.linked || project.filters?.imported) form.requestSubmit();
+    agentEvidence.replaceChildren();
     agentActivity.replaceChildren();
     agentResult.textContent = "";
     revisionHistory = project.revisions || [];
@@ -811,19 +857,123 @@ undoAgent.addEventListener("click", async () => {
   undoAgent.hidden = true;
   await inspectRoom({name: room.label || room.modelId}, room.modelId, room.roomId, room.proposedShot);
 });
+const briefReview = document.querySelector("#brief-review");
+const investigate = document.querySelector("#investigate-shot");
+let reviewedBrief;
+
+function scoutingConstraints() {
+  const inputs = new FormData(agentForm);
+  const shortlisted = inputs.has("shortlist-only");
+  const lockRoom = inputs.has("lock-room");
+  return {
+    brief: inputs.get("brief").trim(),
+    lockedMove: inputs.get("locked-move") || null,
+    lockedLens: inputs.get("lens") ? Number(inputs.get("lens")) : null,
+    targetTravel: inputs.get("target-travel") === "" ? null : Number(inputs.get("target-travel")),
+    minimumTravel: Number(inputs.get("minimum-travel")),
+    allowApply: inputs.has("apply"),
+    allowImport: inputs.has("import-outlines"),
+    requireSightlines: inputs.has("require-sightlines"),
+    shortlist: shortlisted ? shortlist.slice() : null,
+    lockedRoom: lockRoom,
+    currentModel: lockRoom ? selectedRoom?.modelId ?? null : null,
+    currentRoomId: lockRoom ? selectedRoom?.roomId ?? null : null,
+    catalogFilters: shortlisted ? {} : {
+      city: form.elements.city.value,
+      category: form.elements.category.value,
+    },
+  };
+}
+
+function clearBriefReview() {
+  reviewedBrief = undefined;
+  briefReview.hidden = true;
+  investigate.disabled = true;
+}
+
+agentForm.addEventListener("input", clearBriefReview);
+form.addEventListener("change", clearBriefReview);
+document.querySelector("#suggest-constraints").addEventListener("click", () => {
+  if (projectLocked) return;
+  const {lens, minimumTravel} = briefSuggestions(agentForm.elements.brief.value);
+  const filled = [];
+  for (const [name, value, label] of [
+    ["lens", lens, "lens"],
+    ["minimum-travel", minimumTravel, "minimum travel"],
+  ]) {
+    const field = agentForm.elements[name];
+    if (value !== null && field.value === "") {
+      field.value = String(value);
+      filled.push(label);
+    }
+  }
+  if (filled.length) clearBriefReview();
+  agentResult.textContent = filled.length
+    ? "Filled " + filled.join(" and ") + ". Edit the values or review constraints."
+    : "No empty fields matched. Use “35 mm lens” or “at least 0.7 m of travel” in the brief.";
+});
+
+document.querySelector("#review-brief").addEventListener("click", () => {
+  if (projectLocked || !agentForm.reportValidity()) return;
+  clearBriefReview();
+  const constraints = scoutingConstraints();
+  if (!constraints.brief || (constraints.shortlist && !constraints.shortlist.length) ||
+      (constraints.lockedRoom && (!constraints.currentModel || !currentShot()))) {
+    agentResult.textContent = !constraints.brief ? "Enter a shot brief."
+      : constraints.lockedRoom && !currentShot() ? "Open a shot before locking the current room."
+      : "Shortlist a scan before using shortlist-only scouting.";
+    return;
+  }
+  if (constraints.lockedMove === "static" && (constraints.minimumTravel > 0 || constraints.targetTravel > 0)) {
+    agentResult.textContent = "Use zero travel for a static shot.";
+    return;
+  }
+  if (constraints.targetTravel !== null && constraints.targetTravel < constraints.minimumTravel) {
+    agentResult.textContent = "Preferred travel must be at least the minimum.";
+    return;
+  }
+  const {city, category} = constraints.catalogFilters;
+  const lines = [
+    constraints.shortlist ? "Scope: " + constraints.shortlist.length + " shortlisted scans."
+      : "Catalog filters: " + [city, category].filter(Boolean).join(" · "),
+    constraints.lockedRoom ? "Room locked: " + (selectedRoom.label || constraints.currentModel) : "",
+    constraints.lockedLens === null ? "Lens: use brief as guidance or lock a lens above."
+      : "Locked lens: " + constraints.lockedLens + " mm.",
+    constraints.lockedMove ? "Locked camera move: " + agentForm.elements["locked-move"].selectedOptions[0].textContent : "",
+    constraints.targetTravel === null ? "" : "Preferred travel: " + constraints.targetTravel + " m.",
+    "Minimum travel: " + constraints.minimumTravel + " m.",
+    constraints.requireSightlines ? "Captured sightlines required." : "Captured sightlines optional.",
+    constraints.allowImport ? "Matterport outline imports allowed for this run." : "",
+    constraints.allowApply ? "Open a qualifying proposal automatically." : "Report proposals only.",
+  ];
+  if (!constraints.shortlist && !city && !category) lines[0] = "Catalog city and property type are flexible.";
+  briefReview.querySelector("ul").replaceChildren(...lines.filter(Boolean).map(line => element("li", line)));
+  briefReview.hidden = false;
+  reviewedBrief = JSON.stringify(constraints);
+  investigate.disabled = false;
+  agentResult.textContent = "Review the constraints, then investigate.";
+});
+
 agentForm.addEventListener("submit", async event => {
   event.preventDefault();
   if (projectLocked) return;
+  const constraints = scoutingConstraints();
+  if (reviewedBrief !== JSON.stringify(constraints)) {
+    clearBriefReview();
+    agentResult.textContent = "Review the current constraints before investigating.";
+    return;
+  }
   projectLocked = true;
   openProject.disabled = true;
   renderHistory();
   let applied = false;
   const inputs = new FormData(agentForm);
-  const button = agentForm.querySelector("button");
+  const button = investigate;
   const initialRoom = selectedRoom;
   const previousShot = currentShot();
   const initialShot = JSON.stringify(previousShot);
   button.disabled = true;
+  agentEvidence.replaceChildren();
   agentActivity.replaceChildren();
   agentResult.textContent = "Investigating the shot…";
   try {
@@ -831,19 +981,10 @@ agentForm.addEventListener("submit", async event => {
       ? " Current editor: " + (initialRoom.label || initialRoom.modelId) +
         " (model " + initialRoom.modelId + "). Lens: " + document.querySelector("#lens").value + " mm."
       : "";
-    agentResult.textContent = await runAgent(inputs.get("brief") + prior, {
-      lockedLens: inputs.get("lens") ? Number(inputs.get("lens")) : null,
-      allowApply: inputs.has("apply"),
-      minimumTravel: Number(inputs.get("minimum-travel")),
-      requireSightlines: inputs.has("require-sightlines"),
-      shortlist: inputs.has("shortlist-only") ? shortlist.slice() : null,
+    agentResult.textContent = await runAgent(constraints.brief + prior, {
+      ...constraints,
       currentModel: initialRoom?.modelId,
-      catalogFilters: {
-        city: form.elements.city.value,
-        category: form.elements.category.value,
-      },
-      lockedRoom: Boolean(initialRoom && inputs.has("lock-room")),
-      current: previousShot && {lens: previousShot.lens, travel: previousShot.travel,
+      current: previousShot && {roomId: initialRoom?.roomId, lens: previousShot.lens, travel: previousShot.travel,
         sensorWidthMm: previousShot.sensorWidthMm, cameraHeight: previousShot.cameraHeight, rigRadius: previousShot.rigRadius,
         durationSeconds: previousShot.durationSeconds,
         moveKind: previousShot.moveKind, keepMark: previousShot.keepMark, requireSightlines: previousShot.requireSightlines},
@@ -851,6 +992,78 @@ agentForm.addEventListener("submit", async event => {
         if (initialRoom !== selectedRoom || initialShot !== JSON.stringify(currentShot()))
           throw Error("The open setup changed during scouting.");
         return planCurrentShot(request);
+      },
+      onEvidence: ({coverage, candidates, unverifiedLeads, recommended, queued}) => {
+        agentEvidence.replaceChildren();
+        if (coverage.shortlistedScans || coverage.propertiesFound || candidates.length) {
+          const scope = coverage.shortlistedScans === null
+            ? coverage.propertiesFound + " distinct CoStar properties surfaced"
+            : coverage.shortlistedScans + " shortlisted scans in scope";
+          agentEvidence.append(element("p", scope + " · " + coverage.roomsEvaluated +
+            " distinct rooms evaluated · " + candidates.length + " setups tested"));
+        }
+        if (candidates.length) {
+          const list = element("ol", "");
+          for (const candidate of candidates) {
+            const {id, label, model, status, outcome, unmet, travel, requested,
+              clearanceMargin, framingMargin, sightlinesSampled, missingEvidence} = candidate;
+            const entry = element("li", "");
+            entry.dataset.candidate = id;
+            entry.append(element("strong", [label || model || id,
+              id === recommended ? "Top technical match" : status.replace("missing-evidence", "Missing evidence"),
+              id === queued ? "Selected proposal" : ""].filter(Boolean).join(" · ")));
+            entry.append(element("p", outcome));
+            const measurements = [
+              Number.isFinite(travel) ? travel.toFixed(2) + " m of " + requested.toFixed(2) + " m requested" : "",
+              Number.isFinite(clearanceMargin) ? Math.floor(clearanceMargin * 100) + " cm beyond rig radius" : "",
+              Number.isFinite(framingMargin) ? Math.floor(framingMargin * 100) + "% frame margin" : "",
+              Number.isFinite(travel) ? (sightlinesSampled ? "Sampled sightlines clear" : "Sightlines unverified") : "",
+            ].filter(Boolean);
+            if (measurements.length) entry.append(element("p", measurements.join(" · ")));
+            if (missingEvidence?.length) entry.append(element("p", "Still needed · " + missingEvidence.join(", ")));
+            if (unmet.length) entry.append(element("p", "Unmet requirements · " + unmet.join(", ")));
+            list.append(entry);
+          }
+          agentEvidence.append(element("h3", "Tested setups"), list);
+        }
+        if (unverifiedLeads.length) {
+          const list = element("ul", "");
+          for (const lead of unverifiedLeads) {
+            const entry = element("li", [lead.name, lead.city,
+              lead.models.length ? "Room outline not confirmed" : "No linked scan"].filter(Boolean).join(" · "));
+            if (lead.evidence) entry.append(element("p", lead.evidence));
+            for (const scan of lead.scans) {
+              const open = element("button", "Inspect " + (scan.caption || scan.model));
+              open.type = "button";
+              open.addEventListener("click", () => inspectRoom({name: lead.name || scan.model}, scan.model));
+              entry.append(open);
+              if (scan.importError) entry.append(element("p", scan.importError));
+            }
+            list.append(entry);
+          }
+          agentEvidence.append(element("h3", "Leads needing room evidence"), list);
+        }
+      },
+      onAlternatives: alternatives => {
+        for (const {id, room, setup} of alternatives) {
+          const entry = agentEvidence.querySelector('[data-candidate="' + id + '"]');
+          if (!entry) continue;
+          const open = element("button", "Open checked setup");
+          open.type = "button";
+          open.addEventListener("click", async () => {
+            if (projectLocked) return;
+            open.disabled = true;
+            try {
+              await openCheckedProposal(room, setup);
+              agentResult.textContent = "Opened " + id + " for review.";
+            } catch (error) {
+              agentResult.textContent = error.message;
+            } finally {
+              open.disabled = false;
+            }
+          });
+          entry.append(open);
+        }
       },
       activity: text => agentActivity.append(element("li", text)),
       apply: async (room, setup) => {
@@ -863,18 +1076,7 @@ agentForm.addEventListener("submit", async event => {
           undoAgent.hidden = false;
           return;
         }
-        const opening = inspectRoom({name: room.label || room.modelId}, room.modelId, room.roomId, setup);
-        const proposalRequest = roomRequest;
-        const opened = await opening;
-        if (proposalRequest !== roomRequest || proposalRequest.signal.aborted)
-          throw Error("The room changed while the proposal was opening. Your selection was kept.");
-        if (!opened) {
-          await restoreSelection(initialRoom ? {
-            label: initialRoom.label, modelId: initialRoom.modelId, roomId: initialRoom.roomId,
-            shot: previousShot || initialRoom.proposedShot,
-          } : null);
-          throw Error("Could not open the proposed shot.");
-        }
+        await openCheckedProposal(room, setup);
         applied = true;
         previousRoom = initialRoom && {...initialRoom, proposedShot: previousShot || initialRoom.proposedShot};
         undoAgent.hidden = !previousRoom;
@@ -888,7 +1090,7 @@ agentForm.addEventListener("submit", async event => {
   } catch (error) {
     agentResult.textContent = error.message;
   } finally {
-    button.disabled = false;
+    button.disabled = reviewedBrief !== JSON.stringify(scoutingConstraints());
     projectLocked = false;
     openProject.disabled = false;
     renderHistory();

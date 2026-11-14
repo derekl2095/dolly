@@ -25,6 +25,23 @@ def next_turn(payload):
     try:
         with urlopen(Request(url, body, headers), timeout=45) as response:
             result = json.load(response)
-        return result["choices"][0]["message"]
-    except (URLError, TimeoutError, ValueError, KeyError, IndexError, TypeError):
+        choice = result["choices"][0]
+        message = choice["message"]
+        if choice.get("finish_reason") in {"length", "content_filter"}:
+            raise ValueError("Incomplete completion")
+        content = message.get("content")
+        calls = message.get("tool_calls")
+        if content is not None and not isinstance(content, str):
+            raise ValueError("Unexpected message content")
+        if calls is not None and (not isinstance(calls, list) or any(
+                not isinstance(call, dict) or not isinstance(call.get("id"), str) or
+                not isinstance(call.get("function"), dict) or
+                not isinstance(call["function"].get("name"), str) or
+                not isinstance(call["function"].get("arguments"), str)
+                for call in calls)):
+            raise ValueError("Malformed tool calls")
+        if not calls and not (content and content.strip()):
+            raise ValueError("Empty completion")
+        return message
+    except (URLError, TimeoutError, ValueError, KeyError, IndexError, TypeError, AttributeError):
         raise RuntimeError("The configured model did not return a usable response.") from None

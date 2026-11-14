@@ -1,6 +1,6 @@
 import {alignMesh, sightlineCheck} from "./sightlines.js";
 import {actorMarks, checkCameraHeight, loadShot, roomKey, shotSettings} from "./room-state.js";
-import {cameraMoveAxis, checkFraming, checkRigClearance, easedPathFraction, findSlide, interpretDirection, pathFromEndpoints, slideEndpoints, timeFractionAtPath} from "./path.js";
+import {cameraMoveAxis, checkFraming, checkRigClearance, easedPathFraction, editorShotState, findSlide, interpretDirection, pathFromEndpoints, timeFractionAtPath} from "./path.js";
 
 const viewport = document.querySelector("#viewport");
 const status = document.querySelector("#render-status");
@@ -224,7 +224,7 @@ function mount(THREE, room, mesh, textures, release, captured = false) {
     [cx, cz] = saved.mark;
   }
   const initialSettings = shotSettings(room, saved);
-  const aimHeight = initialSettings.aimHeight;
+  let aimHeight = initialSettings.aimHeight;
   duration.value = initialSettings.durationSeconds;
   rig.value = initialSettings.rigRadius;
   sensor.value = initialSettings.sensorWidthMm;
@@ -306,7 +306,11 @@ function mount(THREE, room, mesh, textures, release, captured = false) {
   }
 
   function endpoints(distance) {
-    return slideEndpoints([cx, cz], moveAxis() || [tz - cz, cx - tx], distance);
+    const pose = editorShotState({
+      mark: [cx, cz], axis: fixedMoveAxis, travel: distance, moveKind: moveKind.value,
+      aim: [tx, tz], actors, lens: Number(lens.value), slideAxis: room.slideAxis,
+    });
+    return [pose.start, pose.end];
   }
 
   function framing(from, to, focal = Number(lens.value), cameraHeight = settings().cameraHeight) {
@@ -573,7 +577,10 @@ function mount(THREE, room, mesh, textures, release, captured = false) {
     }
     const shift = Math.hypot(result.mark[0] - cx, result.mark[1] - cz);
     return {
-      setup: {cameraHeight, mark: result.mark, travel: result.length, lens: focal, axis: moveAxis(), requireSightlines: checkMesh},
+      setup: {cameraHeight, aimHeight, mark: result.mark, travel: result.length, lens: focal,
+        sensorWidthMm: settings().sensorWidthMm, rigRadius: settings().rigRadius,
+        moveKind: moveKind.value, axis: moveAxis(), aim: [tx, tz],
+        actors: actors.map(point => point.slice()), requireSightlines: checkMesh},
       ceiling, clearanceMargin: result.margin, sightlinesSampled: raysChecked > 0,
       reason: "Checked " + result.checked + " setups. " +
         (shift ? "Shifted the camera mark " + shift.toFixed(2) + " m. " : "") +
@@ -585,15 +592,40 @@ function mount(THREE, room, mesh, textures, release, captured = false) {
 
   function applySetup(setup) {
     stop();
-    [cx, cz] = setup.mark;
-    fixedMoveAxis = setup.axis;
+    const pose = editorShotState({
+      ...setup, aim: setup.aim || [tx, tz], actors: setup.actors || actors,
+      moveKind: setup.moveKind || moveKind.value, slideAxis: room.slideAxis,
+    });
+    [cx, cz] = pose.mark;
+    fixedMoveAxis = Array.isArray(setup.axis) ? setup.axis.slice() : setup.axis;
+    if (setup.moveKind) {
+      moveKind.value = setup.moveKind;
+      travel.disabled = setup.moveKind === "static";
+    }
+    if (Array.isArray(setup.aim)) {
+      [tx, tz] = setup.aim;
+      if (setup.aimLocked != null) aimLocked = setup.aimLocked;
+    }
+    if (Array.isArray(setup.actors)) {
+      for (let index = 0; index < 2; index++) {
+        const point = Array.isArray(setup.actors[index]) ? setup.actors[index].slice() : null;
+        actors[index] = point;
+        for (const child of marks.children.slice(index * 2, index * 2 + 2)) {
+          if (point) [child.position.x, child.position.z] = point;
+          child.visible = Boolean(point);
+        }
+      }
+    }
     checkedTravel = undefined;
-    lens.value = setup.lens;
+    lens.value = pose.lens;
     if (Number.isFinite(setup.rigRadius)) rig.value = setup.rigRadius;
     if (Number.isFinite(setup.sensorWidthMm)) sensor.value = setup.sensorWidthMm;
     if (Number.isFinite(setup.cameraHeight)) height.value = setup.cameraHeight;
+    if (Number.isFinite(setup.aimHeight)) aimHeight = setup.aimHeight;
+    if (Number.isFinite(setup.durationSeconds)) duration.value = setup.durationSeconds;
     if (typeof setup.requireSightlines === "boolean") checkScan.checked = setup.requireSightlines;
-    travel.value = String(setup.travel);
+    if (typeof setup.keepMark === "boolean") keepMark.checked = setup.keepMark;
+    travel.value = String(pose.travel);
     save();
     render();
   }

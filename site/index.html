@@ -84,15 +84,22 @@ select {max-width:100%} canvas {width:100%;display:block;margin-top:12px;backgro
 <form id="agent-form">
 <label>Shot brief <input name="brief" maxlength="1200" required placeholder="A 35 mm two-shot in a Houston office"></label>
 <label>Lock lens (mm) <input name="lens" type="number" min="15" max="150" placeholder="Optional"></label>
+<label>Lock camera move <select name="locked-move"><option value="">Flexible</option><option value="slide">Lateral slide</option><option value="push">Push-in</option><option value="pull">Pull-back</option><option value="static">Static</option></select></label>
+<label>Preferred travel (m) <input name="target-travel" type="number" min="0" max="4" step="any" placeholder="Optional"></label>
 <label>Minimum travel (m) <input name="minimum-travel" type="number" min="0" max="4" step="any" placeholder="Optional"></label>
 <label><input name="require-sightlines" type="checkbox"> Require captured sightlines for agent proposals</label>
 <label><input name="shortlist-only" type="checkbox"> Scout shortlisted scans only</label>
 <label><input name="lock-room" type="checkbox"> Lock current room</label>
+<label><input name="import-outlines" type="checkbox"> Allow the agent to fetch missing Matterport room outlines</label>
 <label><input name="apply" type="checkbox" checked> Open checked proposal</label>
 <p>Catalog searches use the city and property type selected above.</p>
-<button>Investigate</button>
+<button type="button" id="suggest-constraints">Fill lens and travel from brief</button>
+<button type="button" id="review-brief">Review constraints</button>
+<section id="brief-review" hidden aria-label="Reviewed shot constraints"><ul></ul></section>
+<button type="submit" id="investigate-shot" disabled>Investigate</button>
 </form>
 <p id="agent-result" role="status"></p>
+<section id="agent-evidence" aria-label="Scouting evidence"></section>
 <ol id="agent-activity" aria-label="Scouting activity"></ol>
 <button id="undo-agent" type="button" hidden>Undo applied proposal</button>
 </details>
@@ -117,6 +124,7 @@ select {max-width:100%} canvas {width:100%;display:block;margin-top:12px;backgro
 
 <details id="shortlist" hidden><summary>Shortlisted scans</summary><ul></ul></details>
 <section id="results" aria-label="Property matches"></section>
+<button id="more-locations" type="button" hidden>Load more properties</button>
 <aside><h2 id="room-title">Room plan</h2><p id="room-status" role="status">Select a linked scan to inspect its imported geometry.</p><details id="measured-room" hidden>
 <summary>Import measured room outline</summary>
 <form>
