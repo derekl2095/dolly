@@ -31,6 +31,17 @@ async function request(path, options) {
   return data;
 }
 
+export function briefSuggestions(brief) {
+  const unique = (pattern, min, max) => {
+    const values = [...new Set([...brief.matchAll(pattern)].map(match => Number(match[1])))];
+    return values.length === 1 && values[0] >= min && values[0] <= max ? values[0] : null;
+  };
+  return {
+    lens: unique(/(?<![.\d])\b(\d+)\s*mm\s+lens\b/gi, 15, 150),
+    minimumTravel: unique(/\bat least\s+(\d+(?:\.\d+)?)\s*(?:m|meters?|metres?)\s+of\s+(?:camera\s+)?travel\b/gi, 0, 4),
+  };
+}
+
 export async function runAgent(brief, {activity, apply, lockedLens = null, lockedMove = null, allowApply, current, revise, lockedRoom, requireSightlines = false, minimumTravel = 0, targetTravel = null, shortlist = null, currentModel, catalogFilters = {}, onEvidence = () => {}, onAlternatives = () => {}, allowImport = false, api = request}) {
   if (lockedMove !== null && !["slide", "push", "pull", "static"].includes(lockedMove))
     throw Error("Unsupported camera move lock.");

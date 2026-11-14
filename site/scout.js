@@ -1,7 +1,7 @@
 import {readShotExport} from "./path.js";
 import {parseProjectArchive, projectArchiveMaxBytes, readProjects, writeProject} from "./projects.js";
 import {loadObstacles, outlineMeasurements, roomKey} from "./room-state.js";
-import {runAgent} from "./agent.js";
+import {briefSuggestions, runAgent} from "./agent.js";
 import {compareCapturedRooms} from "./compare.js";
 import {openMesh, closeMesh, currentShot, planCurrentShot, applyCurrentShot} from "./mesh.js";
 
@@ -854,6 +854,26 @@ function clearBriefReview() {
 
 agentForm.addEventListener("input", clearBriefReview);
 form.addEventListener("change", clearBriefReview);
+document.querySelector("#suggest-constraints").addEventListener("click", () => {
+  if (projectLocked) return;
+  const {lens, minimumTravel} = briefSuggestions(agentForm.elements.brief.value);
+  const filled = [];
+  for (const [name, value, label] of [
+    ["lens", lens, "lens"],
+    ["minimum-travel", minimumTravel, "minimum travel"],
+  ]) {
+    const field = agentForm.elements[name];
+    if (value !== null && field.value === "") {
+      field.value = String(value);
+      filled.push(label);
+    }
+  }
+  if (filled.length) clearBriefReview();
+  agentResult.textContent = filled.length
+    ? "Filled " + filled.join(" and ") + ". Edit the values or review constraints."
+    : "No empty fields matched. Use “35 mm lens” or “at least 0.7 m of travel” in the brief.";
+});
+
 document.querySelector("#review-brief").addEventListener("click", () => {
   if (projectLocked || !agentForm.reportValidity()) return;
   clearBriefReview();

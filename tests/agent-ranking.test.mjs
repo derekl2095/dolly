@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import {runAgent} from "../site/agent.js";
+import {briefSuggestions, runAgent} from "../site/agent.js";
 
 test("agent ranks qualifying results and rejects a below-minimum shot", async () => {
   let evidence;
@@ -218,4 +218,12 @@ test("a failed outline import leaves an actionable property lead", async () => {
   });
   assert.deepEqual(evidence.unverifiedLeads[0].scans,
     [{model: "Canal", caption: "Showroom", importError: "No closed room outlines."}]);
+});
+
+test("explicit brief values can fill the lens and minimum travel controls", () => {
+  assert.deepEqual(briefSuggestions("A 35 mm lens and at least 0.7 m of camera travel"),
+    {lens: 35, minimumTravel: .7});
+  assert.deepEqual(briefSuggestions("Try a 35 mm lens or a 50 mm lens, around 1 m of travel"),
+    {lens: null, minimumTravel: null});
+  assert.equal(briefSuggestions("A 35.5 mm lens").lens, null);
 });
