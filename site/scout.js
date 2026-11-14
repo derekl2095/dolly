@@ -456,30 +456,54 @@ function renderRoom(room) {
     " m² outline area · " + room.modelId;
 }
 
-form.addEventListener("submit", async event => {
-  event.preventDefault();
-  const filters = new URLSearchParams(new FormData(form));
-  if (![...filters.values()].some(value => value.trim())) {
-    status.textContent = "Enter a search term or select a filter.";
-    return;
-  }
+const moreLocations = document.querySelector("#more-locations");
+let nextLocationPage;
+let searchRequest;
+
+function resetLocationSearch() {
+  searchRequest?.abort();
+  nextLocationPage = undefined;
+  moreLocations.hidden = true;
+  results.replaceChildren();
+}
+
+async function loadLocationPage(filters) {
+  searchRequest?.abort();
+  const request = new AbortController();
+  searchRequest = request;
   const button = form.querySelector("button");
-  button.disabled = true;
+  button.disabled = moreLocations.disabled = true;
   status.textContent = "Searching the local catalog…";
   try {
-    const response = await fetch("/api/locations?" + filters);
+    const response = await fetch("/api/locations?" + filters, {signal: request.signal});
     const data = await response.json();
+    if (request.signal.aborted) return;
     if (!response.ok) throw new Error(data.error || "Search API failed");
-    const {rows, mode, scanReadiness} = data;
-    results.replaceChildren(...rows.map(row => card(row, scanReadiness)));
+    const {rows, mode, scanReadiness, next_offset: offset} = data;
+    results.append(...rows.map(row => card(row, scanReadiness)));
+    nextLocationPage = undefined;
+    if (Number.isSafeInteger(offset) && offset > Number(filters.get("offset") ?? 0)) {
+      nextLocationPage = new URLSearchParams(filters);
+      nextLocationPage.set("offset", String(offset));
+    }
+    moreLocations.hidden = !nextLocationPage;
+    const count = results.children.length;
     const coverage = mode === "addresses" ? " · CoStar addresses and scan links only" : "";
-    status.textContent = (rows.length ? rows.length + " property matches shown" : "No matching properties.") + coverage;
+    status.textContent = (count ? count + " property matches shown" : "No matching properties.") + coverage;
   } catch (error) {
-    results.replaceChildren();
-    status.textContent = error.message;
+    if (!request.signal.aborted) status.textContent = error.message;
   } finally {
-    button.disabled = false;
+    if (searchRequest === request) button.disabled = moreLocations.disabled = false;
   }
+}
+
+form.addEventListener("submit", event => {
+  event.preventDefault();
+  resetLocationSearch();
+  void loadLocationPage(new URLSearchParams(new FormData(form)));
+});
+moreLocations.addEventListener("click", () => {
+  if (nextLocationPage) void loadLocationPage(nextLocationPage);
 });
 
 const restore = new URLSearchParams(location.search);
@@ -700,7 +724,7 @@ document.querySelector("#new-project").addEventListener("click", () => {
   agentActivity.replaceChildren();
   agentResult.textContent = "";
   form.reset();
-  results.replaceChildren();
+  resetLocationSearch();
   status.textContent = "";
   void restoreSelection(null);
   projectStatus.textContent = "New project. Save it to keep the brief and selected shot.";
@@ -723,7 +747,7 @@ async function openSavedProject(id) {
     form.elements.category.value = project.filters?.category || "";
     form.elements.linked.checked = project.filters?.linked === true;
     form.elements.imported.checked = project.filters?.imported === true;
-    results.replaceChildren();
+    resetLocationSearch();
     status.textContent = "";
     if (project.query?.trim() || project.filters?.city || project.filters?.category || project.filters?.linked || project.filters?.imported) form.requestSubmit();
     agentEvidence.replaceChildren();
