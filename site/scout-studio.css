@@ -198,6 +198,14 @@ a { color: var(--accent); text-underline-offset: .18em; }
 #scout-search > label:has(input[type="checkbox"]) { grid-column: 1 / -1; }
 #scout-search > label:has(input[type="checkbox"]) { min-height: 24px; }
 #agent-form > label:first-child { flex: 1 1 100%; }
+#agent-form textarea[name="brief"] { width: 100%; resize: vertical; min-height: 5.25rem; }
+#shot-plan summary { color: var(--muted); }
+.agent-card-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.agent-card-actions button + button {
+  background: transparent;
+  color: inherit;
+  border: 1px solid var(--line);
+}
 #agent-form > p, #brief-review { flex-basis: 100%; }
 #agent-form > label, #compare-form > label { max-width: 100%; }
 #shot-plan, #pan-choice { flex-basis: 100%; }
@@ -209,6 +217,17 @@ a { color: var(--accent); text-underline-offset: .18em; }
 #agent-options:empty { display: none; }
 #agent-options article { padding: 12px; }
 #agent-options article p { color: var(--muted); }
+#agent-options article:first-child:has(.agent-shot-specs) {
+  border-color: #b38762;
+  background: #26211c;
+}
+#agent-options article .agent-shot-specs {
+  color: inherit;
+  font-size: 1rem;
+  font-weight: 650;
+}
+#agent-counts { color: var(--muted); margin: 4px 0; }
+#agent-counts:empty { display: none; }
 #agent-tests { margin-block: 12px; }
 #brief-review, #agent-progress {
   border: 1px solid var(--line);

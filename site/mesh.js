@@ -1,7 +1,7 @@
 import {mountDaylight} from "./daylight.js?v=matterport-heading";
 import {alignMesh, sightlineCheck} from "./sightlines.js?v=dolly-daylight";
 import {actorCenter, actorMarks, checkCameraHeight, furnitureHeight, loadShot, maxActors, roomKey, shotSettings, standIn} from "./room-state.js?v=volume";
-import {cameraMoveAxis, checkFraming, checkRigClearance, easedPathFraction, editorShotState, findSlide, interpretDirection, pathFromEndpoints, timeFractionAtPath, tracePath} from "./path.js?v=volume";
+import {cameraMoveAxis, checkFraming, checkRigClearance, easedPathFraction, editorShotState, findSlide, interpretDirection, pathFromEndpoints, slideEndpoints, timeFractionAtPath, tracePath} from "./path.js?v=volume";
 
 const viewport = document.querySelector("#viewport");
 const status = document.querySelector("#render-status");

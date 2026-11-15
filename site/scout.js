@@ -5,7 +5,7 @@ import {planProjection} from "./plan-projection.js";
 import {capturedSpaceLabel, cleanPropertyDescription, isVoidRoom, listedArea, spaceLabel} from "./location-labels.js?v=dolly";
 import {briefLocationFilters, briefSuggestions, requestsCameraPan, requestsNaturalLight, reviewShotBrief, runAgent} from "./agent.js?v=ranked-rooms";
 import {compareCapturedRooms} from "./compare.js?v=dolly-catalog";
-import {openMesh, closeMesh, currentShot, planCurrentShot, applyCurrentShot} from "./mesh.js?v=dolly-catalog";
+import {openMesh, closeMesh, currentShot, planCurrentShot, applyCurrentShot} from "./mesh.js?v=shot-revision";
 import {addMapLocations, resetLocationMap} from "./location-map.js?v=location-polish";
 
 const form = document.querySelector("#scout-search");
@@ -1664,6 +1664,8 @@ const briefReview = document.querySelector("#brief-review");
 const investigate = document.querySelector("#investigate-shot");
 const reviewButton = document.querySelector("#review-brief");
 const shotPlan = document.querySelector("#shot-plan");
+const agentCounts = document.querySelector("#agent-counts");
+const agentRunSummary = document.querySelector("#agent-run-summary");
 const panChoice = document.querySelector("#pan-choice");
 let reviewedBrief, interpretedBrief, reviewRequest, panAcceptedBrief, revisionSource;
 const inferredFields = new Map();
@@ -1675,6 +1677,9 @@ function clearAgentResults() {
   agentOptions.replaceChildren();
   agentEvidence.replaceChildren();
   agentActivity.replaceChildren();
+  agentCounts.textContent = "";
+  agentRunSummary.textContent = "";
+  agentRunSummary.hidden = true;
   agentTests.hidden = true;
   agentTests.open = false;
 }
@@ -1716,9 +1721,10 @@ function clearBriefReview() {
 }
 
 agentForm.addEventListener("input", event => {
-  clearBriefReview();
   const name = event.target.name;
   if (name === "brief") {
+    clearBriefReview();
+    agentResult.textContent = "";
     panAcceptedBrief = undefined;
     for (const [field, previous] of inferredFields) {
       const input = agentForm.elements[field];
@@ -1731,9 +1737,10 @@ agentForm.addEventListener("input", event => {
   } else {
     inferredFields.delete(name);
     manuallyEdited.add(name);
+    refreshReviewedPlan();
   }
 });
-form.addEventListener("change", clearBriefReview);
+form.addEventListener("change", refreshReviewedPlan);
 
 function fillReviewSuggestions(draft) {
   for (const [name, value] of [["lens", draft.lens], ["locked-move", draft.move],
@@ -1769,7 +1776,6 @@ document.querySelector("#edit-pan-brief").addEventListener("click", () => {
 reviewButton.addEventListener("click", async () => {
   if (projectLocked || !agentForm.reportValidity()) return;
   clearBriefReview();
-  shotPlan.open = true;
   const brief = agentForm.elements.brief.value.trim();
   if (!brief) {
     agentResult.textContent = "Enter a shot brief.";
@@ -1791,11 +1797,12 @@ reviewButton.addEventListener("click", async () => {
       const draft = await reviewShotBrief(brief, {signal: request.signal});
       if (request.signal.aborted) return;
       fillReviewSuggestions(draft);
-      reviewMessage = "Check the suggested shot plan, then investigate.";
+      reviewMessage = "";
     } catch {
       if (request.signal.aborted) return;
+      shotPlan.open = true;
       fillReviewSuggestions({move: null, scope: null, targetTravel: null, ...briefSuggestions(brief)});
-      reviewMessage = "Model review unavailable. Check the shot plan manually. Investigation needs a connected model provider.";
+      reviewMessage = "Model review unavailable. Check the shot plan manually. Finding shots requires a connected model provider.";
     } finally {
       if (reviewRequest === request) {
         reviewRequest = undefined;
@@ -1811,46 +1818,43 @@ reviewButton.addEventListener("click", async () => {
       inferredFields.set(name, field.value);
     }
   }
+  if (refreshReviewedPlan(reviewMessage)) investigate.focus();
+});
+
+function refreshReviewedPlan(message = "") {
   const constraints = scoutingConstraints();
-  if (!constraints.brief || (constraints.shortlist && !constraints.shortlist.length) ||
-      (constraints.lockedRoom && (!constraints.currentModel || !currentShot()))) {
-    agentResult.textContent = !constraints.brief ? "Enter a shot brief."
-      : constraints.lockedRoom && !currentShot() ? "Open a shot before locking the current room."
-      : "Shortlist a scan before using shortlist-only scouting.";
-    return;
-  }
-  if (constraints.lockedMove === "static" && (constraints.minimumTravel > 0 || constraints.targetTravel > 0)) {
-    agentResult.textContent = "Use zero travel for a static shot.";
-    return;
-  }
-  if (constraints.targetTravel !== null && constraints.targetTravel < constraints.minimumTravel) {
-    agentResult.textContent = "Preferred travel must be at least the minimum.";
-    return;
-  }
+  if (interpretedBrief?.brief !== constraints.brief) return false;
   const {city, category} = constraints.catalogFilters;
+  const propertyType = [...agentForm.elements.category.options].find(option => option.value === category)?.textContent;
   const lines = [
-    constraints.shortlist ? "Scope: " + constraints.shortlist.length + " shortlisted scans."
-      : "Catalog filters: " + [city, category].filter(Boolean).join(" · "),
-    constraints.lockedRoom ? "Room locked: " + (selectedRoom.label || constraints.currentModel) : "",
-    constraints.lockedLens === null ? "Lens: use brief as guidance or lock a lens above."
-      : "Locked lens: " + constraints.lockedLens + " mm.",
-    constraints.lockedMove ? "Locked camera move: " + agentForm.elements["locked-move"].selectedOptions[0].textContent : "",
-    panAcceptedBrief === brief ? "Lateral slide approved in place of the requested pan." : "",
-    constraints.targetTravel === null ? "" : "Preferred travel: " + constraints.targetTravel + " m.",
-    "Minimum travel: " + constraints.minimumTravel + " m.",
-    constraints.naturalLight ? "Prefer rooms with natural-light evidence." : "",
-    constraints.requireSightlines ? "Captured sightlines required." : "Captured sightlines optional.",
-    constraints.catalogFilters.confirmedOnly ? "Search scans with confirmed room outlines." : "",
-    constraints.allowImport ? "Matterport room and MatterPak imports allowed for this run." : "",
-    constraints.allowApply ? "Open a qualifying proposal automatically." : "Report proposals only.",
+    constraints.lockedRoom ? "Current room" : constraints.shortlist
+      ? constraints.shortlist.length + " shortlisted scans" : [city, category ? propertyType || category : ""].filter(Boolean).join(" · ") || "Full catalog",
+    constraints.lockedLens === null ? "Flexible lens" : constraints.lockedLens + " mm required",
+    constraints.lockedMove ? agentForm.elements["locked-move"].selectedOptions[0].textContent : "Flexible move",
+    constraints.targetTravel === null ? "" : constraints.targetTravel + " m preferred",
+    constraints.minimumTravel ? constraints.minimumTravel + " m minimum" : "",
+    constraints.naturalLight ? "Prefer natural light" : "",
+    constraints.requireSightlines ? "Captured sightlines required" : "",
+    constraints.catalogFilters.confirmedOnly ? "Confirmed outlines only" : "",
+    !constraints.allowImport ? "Imports off" : "",
+    constraints.allowApply ? "Auto-open best shot" : "",
   ];
-  if (!constraints.shortlist && !city && !category) lines[0] = "Catalog city and property type are flexible.";
+  const error = !agentForm.checkValidity() ? "Check the values in Edit shot constraints."
+    : requestsCameraPan(constraints.brief) && (panAcceptedBrief !== constraints.brief || constraints.lockedMove !== "slide")
+      ? "Approve a lateral slide or revise the pan request."
+    : constraints.shortlist && !constraints.shortlist.length ? "Shortlist a scan before searching the shortlist."
+    : constraints.lockedRoom && (!constraints.currentModel || !currentShot()) ? "Open a shot before locking the current room."
+    : constraints.lockedMove === "static" && (constraints.minimumTravel > 0 || constraints.targetTravel > 0)
+      ? "Use zero travel for a static shot."
+    : constraints.targetTravel !== null && constraints.targetTravel < constraints.minimumTravel
+      ? "Preferred travel must be at least the minimum." : "";
   briefReview.querySelector("ul").replaceChildren(...lines.filter(Boolean).map(line => element("li", line)));
   briefReview.hidden = false;
-  reviewedBrief = JSON.stringify(constraints);
-  investigate.disabled = false;
-  agentResult.textContent = reviewMessage;
-});
+  reviewedBrief = error ? undefined : JSON.stringify(constraints);
+  investigate.disabled = Boolean(error) || projectLocked;
+  agentResult.textContent = error || (typeof message === "string" ? message : "");
+  return !error;
+}
 
 function renderAgentOptions(options, tradeoff, recommendation, {initialRoom, initialShot, brief, priorTravel}) {
   optionViews.clear();
@@ -1904,7 +1908,9 @@ function renderAgentOptions(options, tradeoff, recommendation, {initialRoom, ini
         }).catch(() => {});
     }
     const moves = {slide: "Lateral slide", push: "Push-in", pull: "Pull-back", static: "Static"};
-    card.append(element("p", [report.lens + " mm", moves[report.move], report.travel.toFixed(2) + " m travel"].filter(Boolean).join(" · ")));
+    const specs = element("p", [report.lens + " mm", moves[report.move], report.travel.toFixed(2) + " m travel"].filter(Boolean).join(" · "));
+    specs.className = "agent-shot-specs";
+    card.append(specs);
     const measurements = [
       Number.isFinite(report.framingMargin) ? Math.floor(report.framingMargin * 100) + "% tightest frame margin" : "Frame margin unavailable",
       report.sightlinesSampled ? "Captured sightlines checked" : "Captured sightlines unverified",
@@ -1936,6 +1942,7 @@ function renderAgentOptions(options, tradeoff, recommendation, {initialRoom, ini
       if (projectLocked || agentOptions.querySelector("button[disabled]")) return false;
       if (view.snapshot && view.room === selectedRoom && view.snapshot === optionSnapshot()) return true;
       open.disabled = true;
+      open.textContent = "Opening shot…";
       try {
         if (room) await openCheckedProposal(room, setup);
         else {
@@ -1953,6 +1960,7 @@ function renderAgentOptions(options, tradeoff, recommendation, {initialRoom, ini
         return false;
       } finally {
         open.disabled = false;
+        open.textContent = "Open shot";
       }
     }
 
@@ -1987,7 +1995,10 @@ function renderAgentOptions(options, tradeoff, recommendation, {initialRoom, ini
       reviewButton.focus();
       reviewButton.click();
     });
-    card.append(open, revise, revision);
+    const actions = element("div", "");
+    actions.className = "agent-card-actions";
+    actions.append(open, revise);
+    card.append(actions, revision);
     agentOptions.append(card);
   }
   markCurrentOption();
@@ -2008,9 +2019,11 @@ agentForm.addEventListener("submit", async event => {
     return;
   }
   projectLocked = true;
+  agentForm.inert = true;
   openProject.disabled = true;
   renderHistory();
   let applied = false;
+  let shotCount = 0;
   const inputs = new FormData(agentForm);
   const button = investigate;
   const initialRoom = selectedRoom;
@@ -2032,7 +2045,7 @@ agentForm.addEventListener("submit", async event => {
       : "";
     const panNote = panAcceptedBrief === constraints.brief ? " The director approved a lateral slide in place of the pan." : "";
     const revisionNote = revisionSource ? " Revise only the requested aspect of this exact open shot. Preserve the actor marks, aim and other reviewed constraints." : "";
-    agentResult.textContent = await runAgent(constraints.brief + prior + panNote + revisionNote, {
+    const summary = await runAgent(constraints.brief + prior + panNote + revisionNote, {
       ...constraints,
       autoBaseline: true,
       currentModel: initialRoom?.modelId,
@@ -2046,6 +2059,10 @@ agentForm.addEventListener("submit", async event => {
         return planCurrentShot(request);
       },
       onEvidence: ({coverage, candidates, unverifiedLeads, recommended, queued}) => {
+        agentCounts.textContent = [
+          coverage.propertiesFound ? `${coverage.propertiesFound} properties found` : "",
+          coverage.roomsEvaluated ? `${coverage.roomsEvaluated} ${coverage.roomsEvaluated === 1 ? "room" : "rooms"} tested` : "",
+        ].filter(Boolean).join(" · ");
         agentEvidence.replaceChildren();
         if (coverage.shortlistedScans || coverage.propertiesFound || candidates.length) {
           const scope = coverage.shortlistedScans === null
@@ -2099,13 +2116,15 @@ agentForm.addEventListener("submit", async event => {
         }
       },
       onResults: ({options, tradeoff, recommendation}) => {
+        shotCount = options.length;
         renderAgentOptions(options, tradeoff, recommendation, {
           initialRoom, initialShot, brief: constraints.brief, priorTravel: revisionSource?.travel,
         });
       },
       activity: text => {
         agentActivity.append(element("li", text));
-        if (text.startsWith("Comparing")) agentPhase.textContent = "Comparing rooms";
+        if (text.startsWith("Importing")) agentPhase.textContent = "Fetching room outlines";
+        else if (text.startsWith("Selected") || text.startsWith("Comparing")) agentPhase.textContent = "Comparing rooms";
         else if (text.startsWith("Testing") || text.startsWith("Checked") || text.startsWith("Retried"))
           agentPhase.textContent = "Testing shots";
         else if (text.startsWith("Preparing") || text.startsWith("Queued"))
@@ -2138,6 +2157,13 @@ agentForm.addEventListener("submit", async event => {
         undoAgent.hidden = !previousRoom;
       },
     });
+    if (shotCount) {
+      agentResult.textContent = applied ? "Opened the tested shot." : `${shotCount} tested ${shotCount === 1 ? "shot" : "shots"} ready to review.`;
+      agentRunSummary.textContent = summary;
+      agentRunSummary.hidden = !summary;
+    } else {
+      agentResult.textContent = summary || "No qualifying shot found.";
+    }
     if (applied) {
       revisionHistory.push({brief: inputs.get("brief"), selection: selectionSnapshot(),
         activity: [...agentActivity.children].map(item => item.textContent)});
@@ -2149,6 +2175,7 @@ agentForm.addEventListener("submit", async event => {
     agentProgress.hidden = true;
     button.disabled = reviewedBrief !== JSON.stringify(scoutingConstraints());
     projectLocked = false;
+    agentForm.inert = false;
     openProject.disabled = false;
     renderHistory();
   }
