@@ -352,7 +352,7 @@ export function framedVoidPanes(mask, size, minWidth, x0, x1, y0, y1) {
 // A pane is a stretch of wall the MatterPak never reconstructed: empty in the
 // occupancy mask, with scanned mesh underneath it for a sill. A solid column
 // wider than a mullion separates panes. Photo color is not used here.
-export function meshGapPanes(mask, size, minWidth, minHeight, maxHeight, minDivider, x0 = 0, x1 = size, yOrigin = null, metersY = null) {
+export function meshGapPanes(mask, size, minWidth, minHeight, maxHeight, minDivider, x0 = 0, x1 = size, yOrigin = null, metersY = null, windowBand = {low: .75, high: 2.2}) {
   const solidAt = (x, y) => x >= 0 && y >= 0 && x < size && y < size && mask[(y * size + x) * 4] > 127;
   const columns = [];
   for (let x = x0; x < x1; x++) {
@@ -391,8 +391,8 @@ export function meshGapPanes(mask, size, minWidth, minHeight, maxHeight, minDivi
         else if (metersY && yOrigin != null && height > maxHeight && top < size - 4) {
           // Keep the window band only when a real sill and a real header survive.
           // One solid pixel above an empty wall is not a header.
-          const bandBottom = Math.max(0, Math.round((.75 - yOrigin) / metersY));
-          const bandTop = Math.min(top, Math.round((2.2 - yOrigin) / metersY));
+          const bandBottom = Math.max(0, Math.round((windowBand.low - yOrigin) / metersY));
+          const bandTop = Math.min(top, Math.round((windowBand.high - yOrigin) / metersY));
           let openRows = 0, rows = 0, sill = 0, sillN = 0, header = 0, headerN = 0;
           for (let row = bandBottom; row < bandTop; row++) { rows++; openRows += open[row]; }
           for (let row = bandBottom - 6; row < bandBottom; row++) {
@@ -657,6 +657,108 @@ export function scannedGlazing(pixels, mask, size, minWidth, minHeight, x0, x1, 
   return {panes};
 }
 
+export function clearPaneCandidates(pixels, mask, size, left, right, bottom, top, minWidth, metersX, metersY) {
+  const scanBottom = Math.max(bottom, Math.round(bottom + (top - bottom) * .42));
+  const minimumSky = Math.max(4, Math.round(.13 / metersY));
+  const isSky = (x, y) => {
+    const i = (y * size + x) * 4;
+    const r = pixels[i], g = pixels[i + 1], b = pixels[i + 2];
+    return mask[i] >= 128 && b >= 120 && b >= r + 13 && b >= g + 5;
+  };
+  const panes = [];
+  let columns = [];
+  const joinGap = Math.max(3, Math.round(.14 / metersX));
+  function flush() {
+    if (!columns.length) return;
+    const x = columns[0].x, right = columns.at(-1).x + 1;
+    if (right - x >= minWidth && columns.length >= (right - x) * .5) {
+      const skyTop = median(columns.map(column => column.top));
+      const skyBottom = median(columns.map(column => column.bottom));
+      const centerLuminance = y => {
+        const values = [];
+        for (let col = x + 2; col < right - 2; col += 2) values.push(luminanceAt(pixels, size, col, y));
+        return median(values);
+      };
+      // Require a horizontal trim edge above the blue region. Track the
+      // vertical frame below it to estimate where the glass meets its sill.
+      const headerEnd = Math.min(top - 2, skyTop + Math.round(.28 / metersY));
+      let header, headerScore = 10;
+      for (let y = Math.max(2, skyTop); y <= headerEnd; y++) {
+        const score = Math.abs(centerLuminance(y + 1) - centerLuminance(y - 1));
+        if (score > headerScore) { header = y; headerScore = score; }
+      }
+      if (header != null) {
+        let sill = skyBottom, weak = 0;
+        const bound = Math.max(bottom + 2, header - Math.round(2.8 / metersY));
+        for (let y = skyBottom; y >= bound; y--) {
+          const l = Math.abs(luminanceAt(pixels, size, x + 2, y) - luminanceAt(pixels, size, Math.max(0, x - 3), y));
+          const r = Math.abs(luminanceAt(pixels, size, right - 3, y) - luminanceAt(pixels, size, Math.min(size - 1, right + 2), y));
+          weak = Math.max(l, r) >= 12 ? 0 : weak + 1;
+          if (weak > Math.max(6, Math.round(.22 / metersY))) break;
+          if (!weak) sill = y;
+        }
+        if ((header - sill) * metersY >= .55)
+          panes.push({x, right, y: sill, top: header, score: columns.length * 20,
+            source: "Blue sky and photographed window frame"});
+      }
+    }
+    columns = [];
+  }
+  for (let x = left; x < right; x++) {
+    const skyRows = [];
+    for (let y = scanBottom; y < top; y++) if (isSky(x, y)) skyRows.push(y);
+    if (skyRows.length < minimumSky) continue;
+    if (columns.length && x - columns.at(-1).x > joinGap) flush();
+    columns.push({x, bottom: skyRows[0], top: skyRows.at(-1)});
+  }
+  flush();
+  return panes;
+}
+
+// Floor-to-ceiling glazing often has no solid sill. Look for repeated horizontal
+// slats across neighboring columns and keep this as texture evidence for review.
+export function blindPaneCandidates(pixels, mask, size, left, right, bottom, top, minWidth) {
+  if (top - bottom < 25 || right - left < minWidth) return [];
+  const low = Math.max(2, bottom + Math.round((top - bottom) * .12));
+  const high = Math.min(size - 2, top - Math.round((top - bottom) * .12));
+  const middle = (low + high) / 2;
+  const votingColumns = [];
+  for (let x = Math.max(left, 2); x < Math.min(right, size - 2); x++) {
+    let last = -4, lower = 0, upper = 0, light = 0, occupied = 0;
+    for (let y = low; y < high; y++) {
+      const value = luminanceAt(pixels, size, x, y);
+      light += value;
+      occupied += Number(mask[(y * size + x) * 4] > 127);
+      if (y - last < 4) continue;
+      const edge = offset => luminanceAt(pixels, size, x + offset, y + 1) -
+        luminanceAt(pixels, size, x + offset, y - 1);
+      const center = edge(0);
+      if (Math.abs(center) < 9 || ![-2, 2].every(offset => edge(offset) * Math.sign(center) >= 5)) continue;
+      last = y;
+      if (y < middle) lower++;
+      else upper++;
+    }
+    if (lower >= 2 && upper >= 2 && light / (high - low) < 145 && occupied / (high - low) >= .55)
+      votingColumns.push(x);
+  }
+  const panes = [];
+  let run = [];
+  const maxGap = Math.max(2, Math.round(minWidth * .2));
+  function flush() {
+    if (run.length >= minWidth * .65 && run.at(-1) - run[0] + 1 >= minWidth) {
+      panes.push({x: run[0], right: run.at(-1) + 1, y: bottom, top,
+        source: "Glazing with repeated blind slats", score: run.length * 15});
+    }
+    run = [];
+  }
+  for (const x of votingColumns) {
+    if (run.length && x - run.at(-1) > maxGap) flush();
+    run.push(x);
+  }
+  flush();
+  return panes;
+}
+
 // Daylight through a hole, as opposed to a black tear or an unscanned doorway.
 export function daylightHole(pixels, mask, size, pane) {
   const lumAt = (x, y) => {
@@ -751,6 +853,39 @@ export function mergePaneViews(candidates) {
     score: best.score + .6 * (views.size - 1)}));
 }
 
+export function preferFramedSkyPanes(panes, hasOpeningEvidence = () => false) {
+  const skyPanes = panes.filter(pane => pane.viewCount >= 2 && pane.source === "Blue sky and photographed window frame");
+  return panes.filter(pane => !pane.source?.startsWith("Scanned glazing") || hasOpeningEvidence(pane) ||
+    !skyPanes.some(sky => overlapFraction(sky, pane) >= .22));
+}
+
+export function paneHasOpeningEvidence(pane, wallPanes, openingBoxes, pixelsPerMeter) {
+  if (pane.source?.startsWith("Unscanned MatterPak opening") || pane.source?.startsWith("Matterport opening")) return true;
+  if (openingBoxes.some(box => overlapFraction(pane, box) >= .68)) return true;
+  const alignment = Math.max(3, pixelsPerMeter * .18);
+  return wallPanes.some(other => {
+    if (!other.source?.startsWith("Unscanned MatterPak opening")) return false;
+    const gap = Math.max(pane.x - other.right, other.x - pane.right, 0);
+    return gap <= pixelsPerMeter * .35 && Math.abs(other.y - pane.y) <= alignment &&
+      Math.min(other.top, pane.top) - Math.max(other.y, pane.y) >= (pane.top - pane.y) * .75;
+  });
+}
+
+export function extendSharedPaneHeader(pane, wallPanes, pixelsXPerMeter, pixelsYPerMeter) {
+  if (!pane.source?.startsWith("Scanned glazing")) return pane;
+  const tolerance = Math.max(3, pixelsYPerMeter * .12);
+  const neighbors = wallPanes.filter(other =>
+    other.source?.startsWith("Unscanned MatterPak opening") && Math.abs(other.y - pane.y) <= tolerance &&
+    other.top - pane.top >= tolerance && other.top - pane.top <= pixelsYPerMeter * .65);
+  const left = neighbors.filter(other => other.right <= pane.x + pixelsXPerMeter * .12 &&
+    pane.x - other.right <= pixelsXPerMeter * .35);
+  const right = neighbors.filter(other => other.x >= pane.right - pixelsXPerMeter * .12 &&
+    other.x - pane.right <= pixelsXPerMeter * .35);
+  const match = left.flatMap(a => right.filter(b => Math.abs(a.top - b.top) <= tolerance)
+    .map(b => Math.min(a.top, b.top)));
+  return match.length ? {...pane, top: Math.min(...match), sharedHeader: true} : pane;
+}
+
 function panesInWallView(pixels, mask, size, width, elevation) {
   const minWidth = Math.max(5, Math.ceil(.28 * size / width));
   const geometry = frameRectangles(mask, size, box => openingEvidence(mask, size, box));
@@ -804,22 +939,29 @@ function bandsOnWall(THREE, openings, wall) {
   return bands;
 }
 
+export function windowSearchScale(room, openings = []) {
+  const header = openings.reduce((top, opening) => Math.max(top, ...(opening.corners ?? [])
+    .map(point => point?.[1]).filter(Number.isFinite)), 0);
+  const reported = Number.isFinite(room.height) && room.height > 0 ? room.height : 3;
+  const elevation = Math.max(reported, header + .15);
+  return {elevation, low: elevation * .25, high: elevation * (2.2 / 3),
+    minSill: Math.min(.35, elevation * .12), maxPaneHeight: Math.max(2.7, elevation * .9)};
+}
+
 export function scanWindowCandidates(THREE, room, mesh, renderer, photoMaterial = object => object.material, openings = []) {
-  const size = 160;
-  const target = new THREE.WebGLRenderTarget(size, size);
+  const target = new THREE.WebGLRenderTarget(160, 160);
   const previous = renderer.getRenderTarget();
   const savedTone = renderer.toneMapping;
   const savedSpace = renderer.outputColorSpace;
   renderer.toneMapping = THREE.NoToneMapping;
   renderer.outputColorSpace = THREE.SRGBColorSpace;
-  const mask = new Uint8Array(size*size*4);
-  const pixels = new Uint8Array(size*size*4);
   const outline = room.outline;
   const winding = Math.sign(outline.reduce((sum, [x,z], i) => {
     const [u,v] = outline[(i+1)%outline.length];
     return sum+x*v-z*u;
   }, 0));
-  const elevation = room.heightEstimated ? 3 : room.height || 3;
+  const scale = windowSearchScale(room, openings);
+  const {elevation} = scale;
   const detectionScene = new THREE.Scene();
   detectionScene.background = new THREE.Color(0x000000);
   const surface = new THREE.MeshBasicMaterial({color: 0xffffff, side: THREE.DoubleSide, toneMapped: false});
@@ -832,18 +974,20 @@ export function scanWindowCandidates(THREE, room, mesh, renderer, photoMaterial 
     if (object.isMesh) object.material = photoMaterial(sourceMeshes[sourceIndex++]);
   });
   detectionScene.add(copy);
-  const walls = outline.slice(0, 32).map(([x, z], i) => {
+  const walls = outline.map(([x, z], i) => {
     const [u, v] = outline[(i + 1) % outline.length];
     const width = Math.hypot(u - x, v - z);
+    if (width < .4) return null;
     const axis = new THREE.Vector3((u - x) / width, 0, (v - z) / width);
     const outward = new THREE.Vector3((v - z) * winding / width, 0, (x - u) * winding / width);
     const origin = new THREE.Vector3(x, 0, z);
     const center = new THREE.Vector3((x + u) / 2, elevation / 2, (z + v) / 2);
     return {width, axis, outward, origin, center,
       plane: new THREE.Plane().setFromNormalAndCoplanarPoint(outward, origin)};
-  }).filter(wall => wall.width >= .4);
+  }).filter(Boolean);
   const candidates = [];
   const rejected = [];
+  const wallViews = [];
   try {
     for (const wall of walls) {
       const bands = bandsOnWall(THREE, openings, wall);
@@ -855,6 +999,10 @@ export function scanWindowCandidates(THREE, room, mesh, renderer, photoMaterial 
       const y1 = elevation * 1.12;
       const frameWidth = width + pad * 2;
       const frameHeight = y1 - y0;
+      const size = Math.max(160, Math.min(384, Math.ceil(Math.max(frameWidth, frameHeight) * 24)));
+      target.setSize(size, size);
+      const mask = new Uint8Array(size * size * 4);
+      const pixels = new Uint8Array(size * size * 4);
       const camera = new THREE.OrthographicCamera(-frameWidth / 2, frameWidth / 2,
         y1 - elevation / 2, y0 - elevation / 2, .05, 6);
       camera.position.copy(center).addScaledVector(wall.outward, -1);
@@ -864,44 +1012,36 @@ export function scanWindowCandidates(THREE, room, mesh, renderer, photoMaterial 
       const heightOf = b => y0 + b / size * frameHeight;
       const wallCandidates = [];
       const wallRejected = [];
-      let foundGaps = false;
-      let foundGlazing = false;
+      const views = new Map();
+
       renderer.setRenderTarget(target);
       for (const angle of [0, -27, 27]) {
-        // Shear the rays while keeping pixels on the wall plane registered.
-        // The wall is at view-space z=-1, so the offset cancels there.
-        const shear = 2 * Math.tan(angle * Math.PI / 180) / width;
-        camera.updateProjectionMatrix();
-        camera.projectionMatrix.elements[8] = shear;
-        camera.projectionMatrix.elements[12] += shear;
-        camera.projectionMatrixInverse.copy(camera.projectionMatrix).invert();
-        // Occupancy stays against the wall so a machine in the room cannot fill a pane.
-        // The slice runs from just inside the outline to a short way outside it.
-        camera.position.copy(center).addScaledVector(wall.outward, -.28);
-        camera.near = .05;
-        camera.far = .9;
-        camera.updateMatrixWorld();
-        camera.updateProjectionMatrix();
-        camera.projectionMatrix.elements[8] = shear;
-        camera.projectionMatrix.elements[12] += shear;
-        camera.projectionMatrixInverse.copy(camera.projectionMatrix).invert();
+        const shear = 2 * Math.tan(angle * Math.PI / 180) / frameWidth;
+        function register(distance, near, far) {
+          camera.position.copy(center).addScaledVector(wall.outward, -distance);
+          camera.near = near;
+          camera.far = far;
+          camera.updateMatrixWorld();
+          camera.updateProjectionMatrix();
+          // The wall is at view-space z = -distance in each pass.
+          camera.projectionMatrix.elements[8] = shear;
+          camera.projectionMatrix.elements[12] += shear * distance;
+          camera.projectionMatrixInverse.copy(camera.projectionMatrix).invert();
+        }
+        // The occupancy pass excludes foreground objects well inside the room.
+        register(.28, .05, .9);
         detectionScene.overrideMaterial = surface;
         renderer.clear();
         renderer.render(detectionScene, camera);
         renderer.readRenderTargetPixels(target, 0, 0, size, size, mask);
-        camera.position.copy(center).addScaledVector(wall.outward, -1);
-        camera.near = .2;
-        camera.far = 6;
-        camera.updateMatrixWorld();
-        camera.updateProjectionMatrix();
-        camera.projectionMatrix.elements[8] = shear;
-        camera.projectionMatrix.elements[12] += shear;
-        camera.projectionMatrixInverse.copy(camera.projectionMatrix).invert();
+        register(1, .2, 6);
         detectionScene.overrideMaterial = null;
         renderer.clear();
         renderer.render(detectionScene, camera);
         renderer.readRenderTargetPixels(target, 0, 0, size, size, pixels);
-        if (angle === 0) {
+        const beforeView = wallCandidates.length;
+        {
+          const before = wallCandidates.length;
           const metersX = frameWidth / size;
           const metersY = frameHeight / size;
           const wallX0 = Math.round(pad / frameWidth * size);
@@ -909,9 +1049,9 @@ export function scanWindowCandidates(THREE, room, mesh, renderer, photoMaterial 
           const gaps = meshGapPanes(mask, size,
             Math.max(4, Math.round(.55 / metersX)),
             Math.max(6, Math.round(.7 / metersY)),
-            Math.max(8, Math.round(2.7 / metersY)),
+            Math.max(8, Math.round(scale.maxPaneHeight / metersY)),
             Math.max(2, Math.round(.08 / metersX)),
-            wallX0, wallX1, y0, metersY);
+            wallX0, wallX1, y0, metersY, scale);
           const emptyShare = (lowMeter, highMeter) => {
             const yA = Math.max(0, Math.round((lowMeter - y0) / frameHeight * size));
             const yB = Math.min(size, Math.round((highMeter - y0) / frameHeight * size));
@@ -924,7 +1064,7 @@ export function scanWindowCandidates(THREE, room, mesh, renderer, photoMaterial 
             }
             return count ? empty / count : 0;
           };
-          const shape = {below: emptyShare(0, .6), band: emptyShare(.8, 2.1), above: emptyShare(2.3, elevation)};
+          const shape = {below: emptyShare(0, scale.low * .8), band: emptyShare(scale.low, scale.high), above: emptyShare(scale.high, elevation)};
           if (gaps.panes.length) {
             for (const pane of gaps.panes) {
               const wide = (pane.right - pane.x) * metersX;
@@ -936,11 +1076,10 @@ export function scanWindowCandidates(THREE, room, mesh, renderer, photoMaterial 
               // room is the ceiling edge, not a pane. One that reaches the
               // floor is a door. A tall black slit is a tear, not a window.
               if (high < 1 && (wide > 1.6 || sill < .9)) continue;
-              if (sill < .35 || sill > elevation - .55) continue;
+              if (sill < scale.minSill || sill > elevation - .55) continue;
               if (sill + high > elevation + .15 && sill > elevation - 1) continue;
               if (high > 1.8 && high > wide * 2.2 && sill < .6 && !daylightHole(pixels, mask, size, pane)) continue;
               if (!openingLooksLikeWindow(pixels, mask, size, pane)) continue;
-              foundGaps = true;
               const across = wide.toFixed(1);
               const tall = high.toFixed(1);
               wallCandidates.push({...pane, view: angle,
@@ -948,19 +1087,18 @@ export function scanWindowCandidates(THREE, room, mesh, renderer, photoMaterial 
             }
           }
           const rowOf = meters => Math.round((meters - y0) / frameHeight * size);
-          const bandLow = rowOf(.75);
-          const bandHigh = rowOf(2.2);
+          const bandLow = rowOf(scale.low);
+          const bandHigh = rowOf(scale.high);
           if (shape.band >= .45) {
             const voids = framedVoidPanes(mask, size,
               Math.max(4, Math.round(.55 / metersX)), wallX0, wallX1, bandLow, bandHigh);
             const shell = shape.below >= .68 && shape.above >= .68 && shape.band >= .68;
             if (!(shell && voids.length < 2)) {
               for (const pane of voids) {
-                if (gaps.panes.some(hole => overlapFraction(hole, pane) >= .4)) continue;
+                if (wallCandidates.some(other => other.view === angle && overlapFraction(other, pane) >= .45)) continue;
                 const wide = (pane.right - pane.x) * metersX;
                 if (wide < .45 || wide > 3.2) continue;
                 if (!openingLooksLikeWindow(pixels, mask, size, pane)) continue;
-                foundGaps = true;
                 wallCandidates.push({...pane, view: angle,
                   source: "Unscanned MatterPak opening, " + wide.toFixed(1) + " m × " +
                     ((pane.top - pane.y) * metersY).toFixed(1) + " m"});
@@ -969,21 +1107,32 @@ export function scanWindowCandidates(THREE, room, mesh, renderer, photoMaterial 
           }
           const glazedMinW = Math.max(4, Math.round(.55 / metersX));
           const glazedMinH = Math.max(6, Math.round(.7 / metersY));
-          for (const [low, high] of [[.75, 2.2]]) {
+          for (const [low, high] of [[scale.low, scale.high], [scale.minSill, elevation - .15]]) {
             const glazed = scannedGlazing(pixels, mask, size, glazedMinW, glazedMinH,
               wallX0, wallX1, rowOf(low), rowOf(high));
             for (const pane of glazed.panes) {
-              if (gaps.panes.some(hole => overlapFraction(hole, pane) >= .4)) continue;
-              if (wallCandidates.some(other => overlapFraction(other, pane) >= .45)) continue;
-              foundGlazing = true;
+              if (wallCandidates.some(other => other.view === angle && overlapFraction(other, pane) >= .45)) continue;
               const across = ((pane.right - pane.x) * metersX).toFixed(1);
               const tall = ((pane.top - pane.y) * metersY).toFixed(1);
               wallCandidates.push({...pane, view: angle,
                 source: "Scanned glazing, " + across + " m × " + tall + " m"});
             }
           }
+          for (const pane of clearPaneCandidates(pixels, mask, size, wallX0, wallX1,
+            rowOf(.04), rowOf(elevation - .08), glazedMinW, metersX, metersY)) {
+            wallCandidates.push({...pane, view: angle});
+          }
+          for (const pane of blindPaneCandidates(pixels, mask, size, wallX0, wallX1,
+            rowOf(.04), rowOf(elevation - .08), glazedMinW)) {
+            if (wallCandidates.some(other => other.view === angle && overlapFraction(other, pane) >= .5)) continue;
+            wallCandidates.push({...pane, view: angle});
+          }
+          if (wallCandidates.length === before && !bands.length) {
+            const fallback = panesInWallView(pixels, mask, size, frameWidth, frameHeight);
+            wallCandidates.push(...fallback.accepted.map(pane => ({...pane, view: angle})));
+            wallRejected.push(...fallback.rejected);
+          }
         }
-        if (foundGaps || foundGlazing) continue;
         if (bands.length) {
           const px = along => ((along - width / 2) / frameWidth + .5) * size;
           const py = y => (y - y0) / frameHeight * size;
@@ -1007,19 +1156,27 @@ export function scanWindowCandidates(THREE, room, mesh, renderer, photoMaterial 
             }
           }
         }
+        if (wallCandidates.length !== beforeView || angle === 0)
+          views.set(angle, pixels.slice());
       }
-      if (foundGaps || foundGlazing) {
-        // Empty scan regions and photographed glass are already panes.
-      } else if (bands.length && !bands.some(band => band.split)) {
-        for (const band of bands) {
-          candidates.push({
-            corners: band.opening.corners,
-            outward: band.opening.outward || wall.outward.toArray(),
-            score: 5, confidence: .8, accepted: true,
-            source: (band.opening.source || "Matterport opening") + " · confidence 0.80",
-          });
-        }
-        continue;
+      if (views.get(0)) wallViews.push({size, frameWidth, frameHeight, pixels: views.get(0)});
+      const preview = box => ({size, frameWidth, frameHeight, box, pixels: views.get(box.view ?? 0)});
+      const allPanes = mergePaneViews(wallCandidates);
+      const openingBox = band => ({x: (band.low + pad) / frameWidth * size, right: (band.high + pad) / frameWidth * size,
+        y: (band.sill - y0) / frameHeight * size, top: (band.header - y0) / frameHeight * size});
+      const openingBoxes = bands.map(openingBox);
+      const merged = preferFramedSkyPanes(allPanes,
+        pane => paneHasOpeningEvidence(pane, allPanes, openingBoxes, size / frameWidth));
+      for (const band of bands.filter(band => !band.split)) {
+        const box = openingBox(band);
+        // A broad opening can cover several narrower, already detected panes.
+        if (merged.some(candidate => overlapFraction(candidate, box) >= .68)) continue;
+        candidates.push({
+          corners: band.opening.corners,
+          outward: band.opening.outward || wall.outward.toArray(),
+          score: 5, confidence: .8, accepted: true, openingEvidence: true, preview: preview(box),
+          source: band.opening.source || "Matterport opening",
+        });
       }
       const place = (box, accept) => {
         const centerAlong = (alongOf(box.x) + alongOf(box.right)) / 2;
@@ -1033,20 +1190,27 @@ export function scanWindowCandidates(THREE, room, mesh, renderer, photoMaterial 
             .setY(heightOf(b)).toArray());
         const confidence = Math.max(0, Math.min(1, (box.confidence ?? box.score / 8)));
         const entry = {corners, outward: wall.outward.toArray(), score: box.score, confidence,
-          accepted: accept, source: accept
-            ? box.source + " · confidence " + confidence.toFixed(2)
+          accepted: accept, preview: accept ? preview(box) : undefined,
+          openingEvidence: accept && paneHasOpeningEvidence(box, merged, openingBoxes, size / frameWidth),
+          source: accept
+            ? box.source
             : "Rejected: " + (box.reason || "does not read as a pane")};
         (accept ? candidates : rejected).push(entry);
       };
-      for (const box of mergePaneViews(wallCandidates)) {
+      for (const box of merged) {
+        const pane = extendSharedPaneHeader(box, merged, size / frameWidth, size / frameHeight);
         const agreement = box.viewCount > 1 ? " · " + box.viewCount + " angles agree" : "";
-        place({...box, source: box.source + agreement, confidence: Math.min(1, box.score / 8)}, true);
+        const source = pane.sharedHeader
+          ? `Scanned glazing, ${((pane.right - pane.x) * frameWidth / size).toFixed(1)} m × ${((pane.top - pane.y) * frameHeight / size).toFixed(1)} m · shared header`
+          : pane.source;
+        place({...pane, source: source + agreement,
+          confidence: Math.min(1, pane.score / 8)}, true);
       }
       for (const box of wallRejected.filter(item => item.reason === "solid column or wall").slice(0, 4))
         place(box, false);
     }
     const distinct = [];
-    for (const candidate of candidates.sort((a, b) => b.score - a.score)) {
+    for (const candidate of candidates.sort((a, b) => Number(b.openingEvidence) - Number(a.openingEvidence) || b.score - a.score)) {
       const center = candidate.corners.reduce((sum, point) => [sum[0] + point[0], sum[1] + point[1], sum[2] + point[2]], [0, 0, 0]);
       if (distinct.some(other => {
         const there = other.corners.reduce((sum, point) => [sum[0] + point[0], sum[1] + point[1], sum[2] + point[2]], [0, 0, 0]);
@@ -1054,10 +1218,9 @@ export function scanWindowCandidates(THREE, room, mesh, renderer, photoMaterial 
       })) continue;
       distinct.push(candidate);
     }
-    console.info("Window detection", distinct.map(entry => entry.source),
-      "rejected", rejected.map(entry => entry.source || entry.reason));
-    const result = distinct.slice(0, 12);
+    const result = distinct.slice(0, 32);
     result.rejected = rejected.slice(0, 8);
+    result.wallViews = wallViews;
     return result;
   } finally {
     renderer.toneMapping = savedTone;

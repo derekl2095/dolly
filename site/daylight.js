@@ -1,6 +1,6 @@
 import {actorHeight, defaultActorHeight, standIn} from "./room-state.js";
-import {createRelight} from "./relight.js?v=dark-panes";
-import {scanWindowCandidates} from "./window-detection.js?v=mesh-gap16";
+import {activeApertures, createRelight, glazingDepth} from "./relight.js?v=window-texture";
+import {scanWindowCandidates} from "./window-detection.js?v=window-frame-review";
 async function request(path, options) {
   const response = await fetch(path, options);
   const data = await response.json();
@@ -10,41 +10,63 @@ async function request(path, options) {
 
 const viable = verdict => ["clear-in-coverage", "exterior-unknown"].includes(verdict.status);
 
-export function interiorStudy(THREE, mesh, profile, frame, actors) {
+export function interiorStudy(THREE, mesh, profile, frame, actors, {projectPatch = true} = {}) {
   const towardSun = new THREE.Vector3(...frame.sun.direction);
   const inward = towardSun.clone().negate();
   const ray = new THREE.Raycaster();
   ray.firstHitOnly = true;
-  const cast = (origin, direction, near, far) => {
-    ray.set(origin, direction);
-    ray.near = near;
-    ray.far = far;
-    return ray.intersectObject(mesh, true)[0];
-  };
   const triangles = [];
   const floorTriangles = [];
   const exposure = actors.map(() => ({lit: false, conditional: false}));
-  const apertures = new Set();
-  for (const verdict of frame.windows.filter(viable)) {
-    const {corners} = profile.windows.find(window => window.id === verdict.id);
-    const [a, b, c, d] = corners.map(point => new THREE.Vector3(...point));
+  const projected = new Set();
+  for (const {window, verdict} of activeApertures(profile, frame)) {
+    const corners = window.corners.map(point => new THREE.Vector3(...point));
+    const [a, b, c, d] = corners;
+    const normal = window.outward ? new THREE.Vector3(...window.outward)
+      : b.clone().sub(a).cross(d.clone().sub(a)).normalize();
+    const incidence = normal.dot(towardSun);
+    if (incidence <= .0001) continue;
+    const testPoint = new THREE.Vector3(), side = new THREE.Vector3();
+    const edges = corners.map((point, i) => corners[(i + 1) % 4].clone().sub(point));
+    function glazing(point) {
+      const separation = testPoint.copy(point).sub(a).dot(normal);
+      if (separation < -glazingDepth.inside || separation > glazingDepth.outside) return false;
+      let positive = true, negative = true;
+      for (let i = 0; i < corners.length; i++) {
+        const sign = side.copy(point).sub(corners[i]).cross(edges[i]).dot(normal);
+        positive &&= sign >= -.0001;
+        negative &&= sign <= .0001;
+      }
+      return positive || negative;
+    }
+    function cast(origin, direction, near, far) {
+      ray.set(origin, direction);
+      ray.near = near;
+      ray.far = far;
+      while (ray.near < far) {
+        const hit = ray.intersectObject(mesh, true)[0];
+        if (!hit || !glazing(hit.point)) return hit;
+        ray.near = hit.distance + .0005;
+      }
+      return undefined;
+    }
     actors.forEach((actor, index) => {
       const distance = verdict.actorApertureMeters[index];
-      if (distance !== null && !cast(new THREE.Vector3(...actor), towardSun, .001, Math.max(.001, distance - .03))) {
+      if (Number.isFinite(distance) && !cast(new THREE.Vector3(...actor), towardSun, .001, distance)) {
         const conditional = verdict.status === "exterior-unknown";
         exposure[index].conditional = exposure[index].lit
           ? exposure[index].conditional && conditional : conditional;
         exposure[index].lit = true;
       }
     });
-    const key = JSON.stringify(corners);
-    if (apertures.has(key)) continue;
-    apertures.add(key);
-    // Start just inside the annotated window plane to skip captured glazing there.
+    const key = JSON.stringify(window.corners);
+    if (!projectPatch || projected.has(key)) continue;
+    projected.add(key);
     const size = 10;
+    const startOffset = Math.min(2, (glazingDepth.outside + .002) / incidence);
     const hit = (u, v) => {
-      const origin = a.clone().lerp(b, u).lerp(d.clone().lerp(c, u), v);
-      return cast(origin, inward, .03, 100)?.point;
+      const origin = a.clone().lerp(b, u).lerp(d.clone().lerp(c, u), v).addScaledVector(towardSun, startOffset);
+      return cast(origin, inward, .001, 100)?.point;
     };
     const lattice = Array.from({length: size + 1}, (_, row) =>
       Array.from({length: size + 1}, (_, col) => hit(col / size, row / size)));
@@ -91,6 +113,44 @@ export function findWindowWall(THREE, outline, ray) {
   return closest;
 }
 
+function showCandidateEvidence(row, candidate, signal, label = "Inspect wall image") {
+  const {size, frameWidth, frameHeight, box, pixels} = candidate.preview ?? {};
+  if (!pixels) return;
+  const details = document.createElement("details");
+  const summary = document.createElement("summary");
+  summary.textContent = label;
+  details.append(summary);
+  details.addEventListener("toggle", () => {
+    if (!details.open || details.querySelector("img")) return;
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(160, Math.round(240 * frameWidth / frameHeight));
+    canvas.height = 240;
+    const source = document.createElement("canvas");
+    source.width = source.height = size;
+    const sourceContext = source.getContext("2d"), context = canvas.getContext("2d");
+    if (!sourceContext || !context) return;
+    const image = sourceContext.createImageData(size, size);
+    for (let y = 0; y < size; y++) {
+      const offset = (size - 1 - y) * size * 4;
+      image.data.set(pixels.subarray(offset, offset + size * 4), y * size * 4);
+    }
+    sourceContext.putImageData(image, 0, 0);
+    const sx = canvas.width / size, sy = canvas.height / size;
+    context.drawImage(source, 0, 0, canvas.width, canvas.height);
+    if (box) {
+      context.strokeStyle = "#59e8ff";
+      context.lineWidth = 2;
+      context.strokeRect(box.x * sx, (size - box.top) * sy, (box.right - box.x) * sx, (box.top - box.y) * sy);
+    }
+    const preview = document.createElement("img");
+    preview.className = "window-evidence-image";
+    preview.alt = box ? "Photographed wall with this candidate outlined in cyan" : label;
+    preview.src = canvas.toDataURL();
+    details.append(preview);
+  }, {signal});
+  row.append(details);
+}
+
 export function mountDaylight({THREE, room, mesh, scene, renderer, fill, marks, isAligned, canvas, camera, signal, actors, actorHeights, render, showFloorPatch}) {
   const panel = document.querySelector("#daylight");
   const frames = new Map();
@@ -102,7 +162,8 @@ export function mountDaylight({THREE, room, mesh, scene, renderer, fill, marks, 
   const clock = panel.querySelector('input[type="range"]');
   const show = panel.querySelector('[name="show"]');
   const appearance = form.elements.appearance;
-  const relight = createRelight(THREE, mesh, fill, scene, renderer, marks);
+  const relight = createRelight(THREE, mesh, fill, scene, renderer, marks, room);
+  canvas.addEventListener("actorstagechange", relight.syncActors, {signal});
   const pick = panel.querySelector('[name="pick"]');
   const session = {model: room.modelId, room: room.roomId ?? null};
   const params = new URLSearchParams({model: session.model});
@@ -256,17 +317,33 @@ export function mountDaylight({THREE, room, mesh, scene, renderer, fill, marks, 
     detect.disabled = true;
     status.textContent = "Looking for window candidates…";
     try {
-      const data = await request("/api/window-candidates", {method: "POST",
-        headers: {"Content-Type": "application/json"}, body: JSON.stringify(session), signal});
+      let openings = [];
+      try {
+        const data = await request("/api/window-candidates", {method: "POST",
+          headers: {"Content-Type": "application/json"}, body: JSON.stringify(session), signal});
+        openings = data.candidates ?? [];
+      } catch { /* The local scan can still suggest windows without remote metadata. */ }
       if (signal.aborted || attempt !== generation) return;
-      const scanned = scanWindowCandidates(THREE, room, mesh, renderer, relight.photoMaterial, data.candidates);
-      const candidates = scanned.length ? [...scanned] : data.candidates;
+      const scanned = scanWindowCandidates(THREE, room, mesh, renderer, relight.photoMaterial, openings);
+      const candidates = scanned.length ? [...scanned] : openings;
       const declined = scanned.rejected || [];
       const modules = candidates.length || declined.length ? await windowLines() : null;
       if (signal.aborted || attempt !== generation) return;
+      const weak = document.createElement("details");
+      const weakTitle = document.createElement("summary");
+      const weakList = document.createElement("ul");
+      weak.append(weakTitle, weakList);
+      let weakCount = 0;
       candidates.forEach((candidate, index) => {
         const {corners, outward, source} = candidate;
-        const outline = drawBox(previews, corners, 0x59e8ff, modules);
+        const weakEvidence = candidate.openingEvidence === false;
+        if (weakEvidence) weakCount++;
+        const outline = drawBox(previews, corners, weakEvidence ? 0x9e92ad : 0x59e8ff, modules);
+        outline.visible = !weakEvidence;
+        if (weakEvidence) weak.addEventListener("toggle", () => {
+          outline.visible = weak.open;
+          render();
+        }, listen);
         const row = document.createElement("li");
         row.append(document.createTextNode("Window candidate " + (index+1) + " · " + source + " "));
         function remove() {
@@ -299,8 +376,15 @@ export function mountDaylight({THREE, room, mesh, scene, renderer, fill, marks, 
           button.addEventListener("click", action, listen);
           row.append(button);
         }
-        suggestions.append(row);
+        showCandidateEvidence(row, candidate, signal);
+        (weakEvidence ? weakList : suggestions).append(row);
       });
+      if (weakCount) {
+        weakTitle.textContent = `Review ${weakCount} texture-only ${weakCount === 1 ? "possibility" : "possibilities"}`;
+        const item = document.createElement("li");
+        item.append(weak);
+        suggestions.append(item);
+      }
       declined.forEach(candidate => {
         if (!candidate.corners) return;
         drawBox(previews, candidate.corners, 0xc47a4a, modules);
@@ -308,8 +392,18 @@ export function mountDaylight({THREE, room, mesh, scene, renderer, fill, marks, 
         row.textContent = candidate.source || candidate.reason;
         suggestions.append(row);
       });
+      if (scanned.wallViews?.length) {
+        const wallReview = document.createElement("details");
+        const summary = document.createElement("summary");
+        summary.textContent = "Review scanned walls";
+        wallReview.append(summary);
+        scanned.wallViews.forEach((preview, i) => showCandidateEvidence(wallReview, {preview}, signal, `Wall ${i + 1}`));
+        const row = document.createElement("li");
+        row.append(wallReview);
+        suggestions.append(row);
+      }
       status.textContent = candidates.length
-        ? "Review " + candidates.length + " outlined candidates before saving. Rejected regions stay listed and are not added."
+        ? `${candidates.length - weakCount} supported openings${weakCount ? ` · ${weakCount} texture-only suggestions` : ""}. Confirm exterior glazing before saving.`
         : "No framed openings found. Clear or fully scanned glass may need four corners marked manually.";
       render();
     } catch (error) {
@@ -325,7 +419,7 @@ export function mountDaylight({THREE, room, mesh, scene, renderer, fill, marks, 
     const frame = wantsStudy() && study?.frames?.[Number(clock.value)];
     const relit = appearance.value === "relit" && Boolean(frame);
     relight.set(relit ? frame : null, saved?.profile);
-    show.disabled = !ready || relit;
+    show.disabled = !ready;
     if (!frame) {
       patch.visible = false;
       showFloorPatch([]);
@@ -333,18 +427,23 @@ export function mountDaylight({THREE, room, mesh, scene, renderer, fill, marks, 
       return;
     }
     const index = Number(clock.value);
-
-    if (!frames.has(index)) frames.set(index, interiorStudy(THREE, mesh, saved.profile, frame, study.actors));
-    const {triangles, floorTriangles, exposure} = frames.get(index);
-    showFloorPatch(floorTriangles);
-    patch.geometry.dispose();
-    patch.geometry = new THREE.BufferGeometry();
-    patch.geometry.setAttribute("position", new THREE.Float32BufferAttribute(triangles, 3));
-    patch.visible = !relit && triangles.length !== 0;
+    const projectPatch = show.checked;
+    const key = 2 * index + Number(projectPatch);
+    if (!frames.has(key)) frames.set(key,
+      interiorStudy(THREE, mesh, saved.profile, frame, study.actors, {projectPatch}));
+    const {triangles, floorTriangles, exposure} = frames.get(key);
+    showFloorPatch(projectPatch ? floorTriangles : []);
+    if (projectPatch && !relit && patch.userData.frame !== triangles) {
+      patch.geometry.dispose();
+      patch.geometry = new THREE.BufferGeometry();
+      patch.geometry.setAttribute("position", new THREE.Float32BufferAttribute(triangles, 3));
+      patch.userData.frame = triangles;
+    }
+    patch.visible = projectPatch && !relit && triangles.length !== 0;
     const assumed = frame.windows.some(w => w.status === "exterior-unknown");
     status.textContent = frame.localTime + " · " + frame.windows.map(w => w.id + " " + w.reason).join(" · ") +
       (assumed ? " · assuming unobstructed sun" : "") +
-      (!triangles.length ? " · No interior surface patch found at this time." : "") +
+      (projectPatch && !triangles.length ? " · No interior surface patch found at this time." : "") +
       exposure.map(({lit, conditional}, i) => " · Actor " + study.indices[i] + " " +
         (lit ? (conditional ? "potential direct sun" : "direct sun") : "outside the evaluated beams")).join("");
     render();
@@ -542,8 +641,12 @@ export function mountDaylight({THREE, room, mesh, scene, renderer, fill, marks, 
     if (pick.checked) status.textContent = "Click four corners around one pane in order, starting at the sill.";
     render();
   }, listen);
-  show.addEventListener("change", evaluate, listen);
+  show.addEventListener("change", () => {
+    if (study?.frames?.length) update();
+    else void evaluate();
+  }, listen);
   appearance.addEventListener("change", () => {
+    show.checked = appearance.value !== "relit";
     if (study?.frames?.length) update();
     else void evaluate();
   }, listen);

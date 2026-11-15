@@ -5,7 +5,7 @@ import {planProjection} from "./plan-projection.js";
 import {capturedSpaceLabel, cleanPropertyDescription, isVoidRoom, listedArea, spaceLabel} from "./location-labels.js?v=dolly";
 import {briefLocationFilters, briefSuggestions, requestsCameraPan, requestsNaturalLight, reviewShotBrief, runAgent} from "./agent.js?v=furniture-sightlines";
 import {compareCapturedRooms} from "./compare.js?v=furniture-sightlines";
-import {openMesh, closeMesh, currentShot, currentShotCanCheckSightlines, planCurrentShot, applyCurrentShot} from "./mesh.js?v=staging-windows";
+import {openMesh, closeMesh, currentShot, currentShotCanCheckSightlines, planCurrentShot, applyCurrentShot} from "./mesh.js?v=window-frame-review";
 import {loadLocationMap, resetLocationMap} from "./location-map.js?v=all-locations";
 
 const form = document.querySelector("#scout-search");

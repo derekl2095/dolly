@@ -263,3 +263,70 @@ test("wall-registered views combine duplicate suggestions and preserve adjacent 
   assert.deepEqual(results.map(box => box.viewCount), [2, 1]);
   assert.equal(results[0].x, first.x);
 });
+
+
+test("a gap and photographed glass retain their own pane across registered views", async () => {
+  const {mergePaneViews} = await import("../site/window-detection.js");
+  const hole = {x: 5, right: 20, y: 10, top: 30, source: "mesh gap", score: 7, view: 0};
+  const glass = {x: 22, right: 43, y: 10, top: 30, source: "photographed glass", score: 7, view: 27};
+  const merged = mergePaneViews([hole, glass, {...hole, x: 6, view: -27}]);
+  assert.deepEqual(merged.map(pane => [pane.source, pane.viewCount]),
+    [["mesh gap", 2], ["photographed glass", 1]]);
+});
+
+test("window search adapts to low ceilings, tall walls, and measured opening metadata", async () => {
+  const {windowSearchScale} = await import("../site/window-detection.js");
+  const low = windowSearchScale({height: 2});
+  const tall = windowSearchScale({height: 6});
+  assert.ok(low.high < 2);
+  assert.ok(tall.high > 4);
+  assert.ok(tall.maxPaneHeight > 5);
+  assert.equal(windowSearchScale({}).elevation, 3);
+  assert.ok(windowSearchScale({height: 3}, [{corners: [[0, 4, 0]]}]).elevation > 4);
+});
+
+test("texture contrast alone does not establish a window opening", async () => {
+  const {paneHasOpeningEvidence} = await import("../site/window-detection.js");
+  const glass = {x: 12, right: 25, y: 10, top: 29, source: "Scanned glazing"};
+  const opening = {x: 1, right: 9, y: 10, top: 31, source: "Unscanned MatterPak opening"};
+  assert.equal(paneHasOpeningEvidence(glass, [glass], [], 20), false);
+  assert.equal(paneHasOpeningEvidence(glass, [glass, opening], [], 20), true);
+  assert.equal(paneHasOpeningEvidence({...glass, y: 17}, [opening], [], 20), false);
+  assert.equal(paneHasOpeningEvidence(glass, [], [{x: 10, right: 26, y: 8, top: 31}], 20), true);
+});
+
+
+test("a short textured pane can use the matching header of two flanking openings", async () => {
+  const {extendSharedPaneHeader} = await import("../site/window-detection.js");
+  const pane = {x: 25, right: 45, y: 30, top: 59, source: "Scanned glazing"};
+  const left = {x: 2, right: 22, y: 30, top: 71, source: "Unscanned MatterPak opening"};
+  const right = {x: 48, right: 63, y: 31, top: 70, source: "Unscanned MatterPak opening"};
+  assert.equal(extendSharedPaneHeader(pane, [left, right], 25, 25).top, 70);
+  assert.equal(extendSharedPaneHeader(pane, [left], 25, 25), pane);
+  assert.equal(extendSharedPaneHeader(pane, [left, {...right, top: 64}], 25, 25), pane);
+  assert.equal(extendSharedPaneHeader(pane, [left, {...right, y: 40}], 25, 25), pane);
+});
+
+test("repeated full-height blind slats provide a texture-only lead without a sill", async () => {
+  const {blindPaneCandidates, paneHasOpeningEvidence} = await import("../site/window-detection.js");
+  const size = 80, pixels = new Uint8Array(size * size * 4), mask = pixels.slice().fill(255);
+  for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) {
+    const at = (y * size + x) * 4;
+    const value = x >= 24 && x < 52 ? (Math.floor(y / 5) % 2 ? 115 : 55) : 180;
+    pixels.fill(value, at, at + 3);
+  }
+  const panes = blindPaneCandidates(pixels, mask, size, 3, 77, 3, 77, 12);
+  assert.equal(panes.length, 1);
+  assert.equal(panes[0].source, "Glazing with repeated blind slats");
+  assert.equal(paneHasOpeningEvidence(panes[0], panes, [], 20), false);
+});
+
+test("a multi-view sky-and-frame candidate supersedes overlapping texture contrast", async () => {
+  const {preferFramedSkyPanes} = await import("../site/window-detection.js");
+  const sky = {x: 10, right: 30, y: 10, top: 40, viewCount: 2, source: "Blue sky and photographed window frame"};
+  const texture = {x: 24, right: 44, y: 12, top: 38, source: "Scanned glazing"};
+  const adjacent = {...texture, x: 32, right: 45};
+  const geometry = {...texture, source: "Unscanned MatterPak opening"};
+  assert.deepEqual(preferFramedSkyPanes([texture, adjacent, sky, geometry]), [adjacent, sky, geometry]);
+  assert.deepEqual(preferFramedSkyPanes([texture, {...sky, viewCount: 1}]), [texture, {...sky, viewCount: 1}]);
+});

@@ -1,9 +1,9 @@
 const fallback = [0x78625d, 0xc4b9a9, 0xb8afa2, 0xd9d4c8];
 
-export function surfaceGroup(height, verticalNormal) {
+export function surfaceGroup(height, verticalNormal, ceiling = 2.15) {
   if (Math.abs(verticalNormal) < .73) return 2;
   if (height <= .22) return 0;
-  return height >= 2.15 ? 3 : 1;
+  return height >= ceiling ? 3 : 1;
 }
 
 export function representativeShade(samples) {
@@ -18,7 +18,7 @@ export function representativeShade(samples) {
   });
 }
 
-function sampleShades(THREE, mesh) {
+function sampleShades(THREE, mesh, bounds, ceiling) {
   const samples = fallback.map(() => []);
   const pixels = new Map();
   const canvas = document.createElement("canvas");
@@ -40,7 +40,7 @@ function sampleShades(THREE, mesh) {
   }
   const a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3();
   const ab = new THREE.Vector3(), ac = new THREE.Vector3();
-  const texel = new THREE.Vector2();
+  const texel = new THREE.Vector2(), centroid = new THREE.Vector3();
   mesh.traverse(object => {
     if (!object.isMesh) return;
     const {geometry, material} = object;
@@ -59,7 +59,9 @@ function sampleShades(THREE, mesh) {
         for (const [point, j] of [a, b, c].map((point, j) => [point, vertices[j]]))
           point.fromBufferAttribute(position, j).applyMatrix4(object.matrixWorld);
         const normal = ab.subVectors(b, a).cross(ac.subVectors(c, a)).normalize();
-        const groupId = surfaceGroup((a.y + b.y + c.y) / 3, normal.y);
+        centroid.copy(a).add(b).add(c).multiplyScalar(1 / 3);
+        if (!bounds.containsPoint(centroid)) continue;
+        const groupId = surfaceGroup(centroid.y, normal.y, ceiling);
         const mean = accessor => vertices.reduce((sum, j) => sum + accessor.call(uv, j), 0) / 3;
         texel.set(mean(uv.getX), mean(uv.getY));
         map.transformUv(texel);
@@ -82,10 +84,22 @@ export function relightLevels(elevation) {
   return {sky: .075 + 1.65 * daylight, beam};
 }
 
+// Limit the depth cut to the glazing immediately around a confirmed pane.
+export const glazingDepth = Object.freeze({inside: .04, outside: .18});
+
+export function activeApertures(profile, frame) {
+  const windows = new Map(profile.windows.map(window => [window.id, window]));
+  return frame.windows.flatMap(verdict => {
+    const window = windows.get(verdict.id);
+    return window && ["clear-in-coverage", "exterior-unknown"].includes(verdict.status)
+      ? [{window, verdict}] : [];
+  });
+}
+
 const apertureShader = `
 varying vec3 relightPosition;
 uniform vec3 sunlightDirection;
-uniform int apertureCount;
+uniform int apertureCount, confirmedPaneCount;
 uniform vec3 apertureCorners[128], apertureNormals[32];
 
 bool inOpening(vec3 point, int i) {
@@ -102,7 +116,7 @@ bool inOpening(vec3 point, int i) {
 }
 `;
 
-export function createRelight(THREE, mesh, fill, scene, renderer, marks) {
+export function createRelight(THREE, mesh, fill, scene, renderer, marks, room) {
   const originals = new Map();
   mesh.traverse(object => {
     if (object.isMesh) originals.set(object, {
@@ -118,7 +132,16 @@ export function createRelight(THREE, mesh, fill, scene, renderer, marks) {
   sun.shadow.bias = -.00012;
   sun.shadow.normalBias = .018;
   sun.shadow.autoUpdate = false;
-  const bounds = new THREE.Box3().setFromObject(mesh);
+  const bounds = new THREE.Box3();
+  const ceiling = Number.isFinite(room?.height) && room.height > 0 ? room.height : 3;
+  if (room?.outline?.length >= 3) {
+    for (const [x, z] of room.outline) {
+      bounds.expandByPoint(new THREE.Vector3(x, 0, z));
+      bounds.expandByPoint(new THREE.Vector3(x, ceiling, z));
+    }
+    bounds.expandByScalar(.35);
+  } else bounds.setFromObject(mesh);
+  const ceilingThreshold = ceiling * (2.15 / 3);
   const center = bounds.getCenter(new THREE.Vector3());
   const radius = Math.max(1, bounds.getSize(new THREE.Vector3()).length() / 2) + .5;
   const shadowCamera = sun.shadow.camera;
@@ -131,6 +154,7 @@ export function createRelight(THREE, mesh, fill, scene, renderer, marks) {
   const uniforms = {
     sunlightDirection: {value: new THREE.Vector3()},
     apertureCount: {value: 0},
+    confirmedPaneCount: {value: 0},
     apertureCorners: {value: Array.from({length: 128}, () => new THREE.Vector3())},
     apertureNormals: {value: Array.from({length: 32}, () => new THREE.Vector3())},
   };
@@ -172,13 +196,32 @@ for (int i = 0; i < 32; ++i) {
   if (i >= apertureCount) break;
   vec3 n = apertureNormals[i];
   float separation = dot(relightPosition - apertureCorners[i * 4], n);
-  if (abs(separation) <= 0.10 && inOpening(relightPosition - separation * n, i)) discard;
+  if (separation >= -${glazingDepth.inside} && separation <= ${glazingDepth.outside} && inOpening(relightPosition - separation * n, i)) discard;
 }
 `);
   };
 
-  let material;
+  const roomMaterials = new Map();
   const actorMaterials = new Map();
+  const actorOriginals = new Map();
+
+  function syncActors() {
+    if (!enabled) return;
+    marks.traverse(actor => {
+      if (!actor.isMesh || actorOriginals.has(actor)) return;
+      const original = actor.material;
+      actorOriginals.set(actor, {material: original, cast: actor.castShadow, receive: actor.receiveShadow});
+      if (!actorMaterials.has(original)) {
+        const lit = original.clone();
+        lit.onBeforeCompile = applyReceiver;
+        actorMaterials.set(original, lit);
+      }
+      actor.material = actorMaterials.get(original);
+      actor.castShadow = actor.receiveShadow = true;
+    });
+    if (sun.visible) sun.shadow.needsUpdate = true;
+  }
+
   let enabled = false;
   let previousFrame;
   let previousProfile;
@@ -187,56 +230,81 @@ for (int i = 0; i < 32; ++i) {
     previousFrame = frame;
     previousProfile = profile;
     const active = Boolean(frame);
-    if (active && !material) {
-      const shades = sampleShades(THREE, mesh).map((samples, i) => {
+    if (active && !roomMaterials.size) {
+      const shades = sampleShades(THREE, mesh, bounds, ceilingThreshold).map((samples, i) => {
         const rgb = representativeShade(samples);
         const color = new THREE.Color(fallback[i]);
         return rgb ? color.lerp(new THREE.Color().setRGB(...rgb, THREE.SRGBColorSpace),
           Math.min(1, samples.length / 48)) : color;
       });
-      material = new THREE.MeshStandardMaterial({roughness: .94, side: THREE.DoubleSide});
-      material.onBeforeCompile = shader => {
-        applyReceiver(shader);
-        ["floor", "raised", "wall", "ceiling"].forEach((key, i) => {
-          shader.uniforms[key + "Shade"] = {value: shades[i]};
-        });
-        shader.fragmentShader = `
+      function materialFor(original) {
+        if (roomMaterials.has(original)) return roomMaterials.get(original);
+        const material = new THREE.MeshStandardMaterial({roughness: .94, side: THREE.DoubleSide,
+          map: original.map ?? null});
+        material.onBeforeCompile = shader => {
+          applyReceiver(shader);
+          shader.uniforms.roomCeilingThreshold = {value: ceilingThreshold};
+          ["floor", "raised", "wall", "ceiling"].forEach((key, i) => {
+            shader.uniforms[key + "Shade"] = {value: shades[i]};
+          });
+          shader.fragmentShader = `
 uniform vec3 floorShade, raisedShade, wallShade, ceilingShade;
-` + shader.fragmentShader.replace("#include <color_fragment>", `
-#include <color_fragment>
+uniform float roomCeilingThreshold;
+` + shader.fragmentShader.replace("#include <map_fragment>", `
+#include <map_fragment>
 vec3 surfaceNormal = normalize(cross(dFdx(relightPosition), dFdy(relightPosition)));
-diffuseColor.rgb = abs(surfaceNormal.y) < 0.73 ? wallShade :
-  (relightPosition.y <= 0.22 ? floorShade : (relightPosition.y >= 2.15 ? ceilingShade : raisedShade));
+vec3 roomShade = abs(surfaceNormal.y) < 0.73 ? wallShade :
+  (relightPosition.y <= 0.22 ? floorShade : (relightPosition.y >= roomCeilingThreshold ? ceilingShade : raisedShade));
+#ifdef USE_MAP
+for (int i = 0; i < 32; ++i) {
+  if (i >= confirmedPaneCount) break;
+  vec3 normal = apertureNormals[i];
+  float separation = dot(relightPosition - apertureCorners[i * 4], normal);
+  if (separation >= -${glazingDepth.inside} && separation <= ${glazingDepth.outside} &&
+      inOpening(relightPosition - separation * normal, i)) {
+    roomShade = mix(roomShade, diffuseColor.rgb, 0.85);
+    break;
+  }
+}
+#endif
+diffuseColor.rgb = roomShade;
 `);
-      };
-      for (const actor of marks.children) {
-        if (actorMaterials.has(actor.material)) continue;
-        const lit = actor.material.clone();
-        lit.onBeforeCompile = applyReceiver;
-        actorMaterials.set(actor.material, lit);
+        };
+        roomMaterials.set(original, material);
+        return material;
+      }
+      for (const record of originals.values()) {
+        const original = record.material;
+        record.relit = Array.isArray(original) ? original.map(materialFor) : materialFor(original);
       }
     }
     if (active !== enabled) {
       for (const [object, original] of originals) {
-        object.material = active ? material : original.material;
+        object.material = active ? original.relit : original.material;
         object.customDepthMaterial = active ? glassDepth : original.depth;
         object.castShadow = active || original.cast;
         object.receiveShadow = active || original.receive;
       }
-      for (const actor of marks.children) {
-        if (active) actor.material = actorMaterials.get(actor.material);
-        else for (const [original, lit] of actorMaterials) if (actor.material === lit) actor.material = original;
-        actor.receiveShadow = active;
+      if (!active) {
+        for (const [actor, original] of actorOriginals) {
+          actor.material = original.material;
+          actor.castShadow = original.cast;
+          actor.receiveShadow = original.receive;
+        }
+        actorOriginals.clear();
       }
       enabled = active;
       renderer.shadowMap.enabled = active || shadowEnabled;
     }
+    if (active) syncActors();
     const levels = active && relightLevels(frame.sun.elevation);
     fill.intensity = active ? levels.sky : originalIntensity;
-    const apertures = active ? profile.windows.filter(window => frame.windows.some(verdict =>
-      verdict.id === window.id && ["clear-in-coverage", "exterior-unknown"].includes(verdict.status))) : [];
+    const apertures = active ? activeApertures(profile, frame).map(({window}) => window) : [];
     uniforms.apertureCount.value = apertures.length;
-    apertures.forEach((window, i) => {
+    const activeIDs = new Set(apertures.map(window => window.id));
+    const confirmedPanes = active ? [...apertures, ...profile.windows.filter(window => !activeIDs.has(window.id))] : [];
+    uniforms.confirmedPaneCount.value = confirmedPanes.length;
+    confirmedPanes.forEach((window, i) => {
       window.corners.forEach((corner, j) => uniforms.apertureCorners.value[i * 4 + j].fromArray(corner));
       uniforms.apertureNormals.value[i].fromArray(window.outward);
     });
@@ -250,12 +318,12 @@ diffuseColor.rgb = abs(surfaceNormal.y) < 0.73 ? wallShade :
     }
   }
   sun.visible = false;
-  return {set, photoMaterial: object => originals.get(object)?.material ?? object.material, dispose() {
+  return {set, syncActors, photoMaterial: object => originals.get(object)?.material ?? object.material, dispose() {
     set(null);
     scene.remove(sun, sun.target);
     sun.shadow.dispose();
     glassDepth.dispose();
-    material?.dispose();
+    for (const material of roomMaterials.values()) material.dispose();
     for (const lit of actorMaterials.values()) lit.dispose();
   }};
 }

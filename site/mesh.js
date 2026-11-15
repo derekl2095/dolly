@@ -1,4 +1,4 @@
-import {mountDaylight} from "./daylight.js?v=staging-windows";
+import {mountDaylight} from "./daylight.js?v=window-frame-review";
 import {alignMesh, furnitureSightlineCheck, sightlineCheck} from "./sightlines.js?v=furniture-sightlines";
 import {actorCenter, actorHeight, defaultActorHeight, actorMarks, checkCameraHeight, furnitureHeight, loadShot, maxActors, roomKey, shotSettings, standIn} from "./room-state.js?v=staging-controls";
 import {cameraMoveAxis, checkFraming, checkRigClearance, easedPathFraction, editorShotState, findSlide, interpretDirection, pathFromEndpoints, slideEndpoints, timeFractionAtPath, tracePath} from "./path.js?v=staging-controls";
@@ -261,6 +261,7 @@ function mount(THREE, room, mesh, textures, release, captured = false) {
       if (point) [figure.position.x, figure.position.z] = point;
     });
     marks.children.slice(actors.length).forEach(child => { child.visible = false; });
+    renderer.domElement.dispatchEvent(new Event("actorstagechange"));
   }
   updateStandIns();
   const fill = new THREE.HemisphereLight(0xffffff, 0xb7a28f, 2.3);
@@ -477,7 +478,10 @@ function mount(THREE, room, mesh, textures, release, captured = false) {
     camera.updateProjectionMatrix();
     camera.position.set(x, settings().cameraHeight, z);
     camera.lookAt(previewAim?.[0] ?? tx, aimHeight, previewAim?.[1] ?? tz);
-    marks.visible = showMarks.checked;
+    if (marks.visible !== showMarks.checked) {
+      marks.visible = showMarks.checked;
+      renderer.domElement.dispatchEvent(new Event("actorstagechange"));
+    }
     outline.visible = reviewing;
     if (reviewing) {
       const savedFloor = room.matterpakFloorHeight || 0;
