@@ -33,7 +33,8 @@ export function parseProjectArchive(text) {
   const optionalText = (value, max) => value == null || isText(value, max);
   const settingsValid = settings => settings == null || (isObject(settings) &&
     optionalText(settings.brief, 1200) && optionalText(settings.lens, 32) &&
-    optionalText(settings.minimumTravel, 32) &&
+    optionalText(settings.minimumTravel, 32) && optionalText(settings.city, 80) &&
+    optionalText(settings.category, 80) &&
     ["lockRoom", "requireSightlines", "apply", "shortlistOnly"].every(key =>
       settings[key] == null || typeof settings[key] === "boolean"));
   const filtersValid = filters => filters == null || (isObject(filters) &&

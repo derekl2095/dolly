@@ -54,7 +54,7 @@ select {max-width:100%} canvas {width:100%;display:block;margin-top:12px;backgro
 #transport input[type="range"] {width:90px;padding:0}
 @media(max-width:700px){.layout{grid-template-columns:1fr}}
 </style>
-<link rel="stylesheet" href="scout-studio.css?v=brief-review">
+<link rel="stylesheet" href="scout-studio.css?v=visible-actors">
 </head>
 <body><main>
 <header class="studio-header">
@@ -126,11 +126,18 @@ select {max-width:100%} canvas {width:100%;display:block;margin-top:12px;backgro
 <label><input name="lock-room" type="checkbox"> Lock current room</label>
 <label><input name="import-outlines" type="checkbox"> Allow the agent to fetch room outlines and MatterPaks</label>
 <label><input name="apply" type="checkbox"> Open checked proposal</label>
-<p>Catalog searches use the city and property type selected above.</p>
+<label>Search city <select name="city"><option value="">Use catalog filter</option><option>Houston</option><option>Los Angeles</option></select></label>
+<label>Search property type <select name="category"><option value="">Use catalog filter</option><option value="office">Office</option><option value="industrial warehouse">Industrial</option><option value="retail">Retail</option><option value="flex">Flex</option><option value="hotel hospitality">Hotel</option><option value="apartment multifamily">Apartment</option><option value="land">Land</option></select></label>
 </div></details>
-<section id="brief-review" hidden aria-label="Reviewed shot constraints"><ul></ul></section>
-<button type="submit" id="investigate-shot" disabled>Investigate</button>
+<section id="brief-review" hidden aria-label="Reviewed shot constraints">
+<h3>Reviewed shot plan</h3>
+<ul></ul>
+<div class="agent-actions"><button type="submit" id="investigate-shot" disabled>Investigate</button></div>
+</section>
 </form>
+<div id="agent-progress" hidden>
+<strong id="agent-phase"></strong><p id="agent-step" role="status"></p>
+</div>
 <p id="agent-result" role="status"></p>
 <section id="agent-options" aria-label="Playable shots"></section>
 <details id="agent-tests" hidden>
@@ -292,4 +299,4 @@ select {max-width:100%} canvas {width:100%;display:block;margin-top:12px;backgro
 </div>
 </main>
 <script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js","three-mesh-bvh":"https://cdn.jsdelivr.net/npm/three-mesh-bvh@0.8.3/build/index.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"}}</script>
-<script type="module" src="scout.js?v=brief-review"></script></body></html>
+<script type="module" src="scout.js?v=visible-actors"></script></body></html>

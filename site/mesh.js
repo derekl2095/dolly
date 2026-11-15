@@ -211,7 +211,7 @@ function mount(THREE, room, mesh, textures, release, captured = false) {
   }
   const fill = new THREE.HemisphereLight(0xffffff, 0xb7a28f, 2.3);
   scene.add(marks, fill);
-  showMarks.checked = false;
+  showMarks.checked = saved.showStandIns === true && actors.every(Boolean);
   let aligned = captured && room.matterpakAlignmentVerified === true;
   checkScan.disabled = !aligned;
   checkScan.checked = false;
@@ -248,7 +248,7 @@ function mount(THREE, room, mesh, textures, release, captured = false) {
   function save() {
     try {
       localStorage.setItem(key, JSON.stringify({
-        mark: [cx, cz], ...settings(), aimHeight, lens: Number(lens.value), travel: curve?.travel ?? Number(travel.value), keepMark: keepMark.checked, moveKind: moveKind.value, axis: fixedMoveAxis, pathPoints: curve?.points, requireSightlines: checkScan.checked, actors, aimLocked, aim: [tx, tz],
+        mark: [cx, cz], ...settings(), aimHeight, lens: Number(lens.value), travel: curve?.travel ?? Number(travel.value), keepMark: keepMark.checked, moveKind: moveKind.value, axis: fixedMoveAxis, pathPoints: curve?.points, requireSightlines: checkScan.checked, showStandIns: showMarks.checked, actors, aimLocked, aim: [tx, tz],
       }));
     } catch {}
   }
@@ -698,6 +698,7 @@ function mount(THREE, room, mesh, textures, release, captured = false) {
         }
       }
     }
+    if (setup.showStandIns === true && actors.every(Boolean)) showMarks.checked = true;
     checkedTravel = undefined;
     lens.value = pose.lens;
     if (Number.isFinite(setup.rigRadius)) rig.value = setup.rigRadius;
@@ -779,7 +780,7 @@ function mount(THREE, room, mesh, textures, release, captured = false) {
     link.click();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   }, options);
-  showMarks.addEventListener("change", render, options);
+  showMarks.addEventListener("change", () => { save(); render(); }, options);
   moveKind.addEventListener("change", () => {
     if (moveKind.value === "curve" && curve) return;
     stop();
@@ -816,7 +817,7 @@ function mount(THREE, room, mesh, textures, release, captured = false) {
 
   return {plan: planShot, apply: applySetup, snapshot() {
     return {mark: [cx, cz], ...settings(), aimHeight, lens: Number(lens.value), travel: curve?.travel ?? Number(travel.value),
-      moveKind: moveKind.value, axis: fixedMoveAxis, pathPoints: curve?.points, keepMark: keepMark.checked, requireSightlines: checkScan.checked, obstacles, actors: actors.map(point => point?.slice() ?? null), aimLocked, aim: [tx, tz]};
+      moveKind: moveKind.value, axis: fixedMoveAxis, pathPoints: curve?.points, keepMark: keepMark.checked, requireSightlines: checkScan.checked, showStandIns: showMarks.checked, obstacles, actors: actors.map(point => point?.slice() ?? null), aimLocked, aim: [tx, tz]};
   }, dispose() {
     stop();
     controls.abort();

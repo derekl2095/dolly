@@ -208,6 +208,24 @@ a { color: var(--accent); text-underline-offset: .18em; }
 #agent-options article { padding: 12px; }
 #agent-options article p { color: var(--muted); }
 #agent-tests { margin-block: 12px; }
+#brief-review, #agent-progress {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+}
+#brief-review ul {
+  list-style: none;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 8px 0 12px;
+}
+#brief-review li { padding: 4px 8px; background: #302b24; border-radius: 4px; }
+#agent-progress { margin-block: 12px; }
+#agent-step { margin: 4px 0 0; color: var(--muted); }
+#agent-options article[aria-current="true"] { border-color: #f1b87b; }
+#agent-options .agent-current { color: #f1b87b; }
 
 
 #projects {

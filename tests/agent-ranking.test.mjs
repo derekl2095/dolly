@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import {briefSuggestions, reviewShotBrief, runAgent} from "../site/agent.js";
+import {briefLocationFilters, briefSuggestions, reviewShotBrief, runAgent} from "../site/agent.js";
 
 test("agent ranks qualifying results and rejects a below-minimum shot", async () => {
   let evidence;
@@ -548,4 +548,61 @@ test("an unqualified shot stays a measured tradeoff with no playable action", as
   assert.deepEqual(results.options, []);
   assert.deepEqual(results.tradeoff.unmet, ["Minimum travel"]);
   assert.equal(results.tradeoff.travel, .8);
+});
+
+test("the review recognizes LA office constraints without locking ambiguous locations", () => {
+  assert.deepEqual(briefLocationFilters("Start wide and drift closer in an LA office with natural light."),
+    {city: "Los Angeles", category: "office"});
+  assert.deepEqual(briefLocationFilters("An office or warehouse in Los Angeles or Houston."),
+    {city: null, category: null});
+});
+
+test("a search runs the reviewed baseline even when the model never calls the solver", async () => {
+  const model = "AuditedOffice";
+  const room = {modelId: model, roomId: "office", label: "Office", height: 3,
+    outline: [[-6, -6], [6, -6], [6, 6], [-6, 6]], camera: [0, 4.8], lookAt: [0, 0],
+    actors: [[-.55, 0], [.55, 0]]};
+  const tool = (name, args) => ({id: name, function: {name, arguments: JSON.stringify(args)}});
+  let turn = 0;
+  let results;
+  const actions = [];
+  await runAgent("LA office, a 35 mm push-in with at least 1 m travel.", {
+    autoBaseline: true, allowImport: true, lockedLens: 35, lockedMove: "push", minimumTravel: 1,
+    catalogFilters: {city: "Los Angeles", category: "office"},
+    activity() {}, onResults(value) { results = value; },
+    apply() { assert.fail("The editor should stay in place in review mode."); },
+    async api(path, options) {
+      const url = new URL(path, "http://localhost");
+      if (url.pathname === "/api/agent-turn") {
+        if (turn++ === 0) return {tool_calls: [
+          tool("study_daylight", {model, room: "office"}),
+          tool("search_locations", {query: "", confirmedOnly: true, city: "Houston"}),
+        ]};
+        const messages = JSON.parse(options.body).messages;
+        assert.match(JSON.parse(messages.at(-2).content).error, /Find a playable shot/);
+        const {baseline} = JSON.parse(messages.at(-1).content);
+        assert.equal(baseline.lens, 35);
+        assert.equal(baseline.move, "push");
+        assert.equal(baseline.travel, 1);
+        return {content: "Baseline checked."};
+      }
+      actions.push(url.pathname);
+      switch (url.pathname) {
+        case "/api/locations":
+          assert.equal(url.searchParams.get("city"), "Los Angeles");
+          assert.equal(url.searchParams.get("category"), "office");
+          return {rows: [{property_id: 1, models: {[model]: "Office"}}],
+            scanReadiness: {[model]: {remoteRoomCount: 1, roomCount: 0}}};
+        case "/api/rooms": return [];
+        case "/api/import-room": return {imported: 1};
+        case "/api/room": return room;
+        default: assert.fail(path);
+      }
+    },
+  });
+  assert.deepEqual(actions, ["/api/locations", "/api/rooms", "/api/import-room", "/api/room"]);
+  assert.equal(results.options.length, 1);
+  assert.equal(results.options[0].setup.lens, 35);
+  assert.equal(results.options[0].setup.moveKind, "push");
+  assert.equal(results.options[0].opened, false);
 });

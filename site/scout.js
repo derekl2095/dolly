@@ -1,9 +1,9 @@
 import {maxCurvePoints, readShotExport, roundStroke} from "./path.js?v=5";
-import {deleteProject, parseProjectArchive, projectArchiveMaxBytes, readProjects, writeProject} from "./projects.js?v=11";
+import {deleteProject, parseProjectArchive, projectArchiveMaxBytes, readProjects, writeProject} from "./projects.js?v=first-shot";
 import {loadObstacles, outlineMeasurements, roomKey} from "./room-state.js";
-import {briefSuggestions, reviewShotBrief, runAgent} from "./agent.js?v=brief-review";
+import {briefLocationFilters, briefSuggestions, reviewShotBrief, runAgent} from "./agent.js?v=first-shot";
 import {compareCapturedRooms} from "./compare.js";
-import {openMesh, closeMesh, currentShot, planCurrentShot, applyCurrentShot} from "./mesh.js?v=brief-review";
+import {openMesh, closeMesh, currentShot, planCurrentShot, applyCurrentShot} from "./mesh.js?v=visible-actors";
 import {addMapLocations, resetLocationMap} from "./location-map.js?v=9";
 
 const form = document.querySelector("#scout-search");
@@ -524,6 +524,7 @@ async function inspectRoom(row, model, roomId, proposedShot, autoGeometry = true
   importMesh.hidden = true;
   importMesh.disabled = retryMesh.disabled = false;
   selectedRoom = undefined;
+  markCurrentOption();
   closeMesh();
   roomPicker.hidden = true;
   const request = new AbortController();
@@ -933,6 +934,30 @@ const agentResult = document.querySelector("#agent-result");
 const agentEvidence = document.querySelector("#agent-evidence");
 const agentOptions = document.querySelector("#agent-options");
 const agentTests = document.querySelector("#agent-tests");
+const agentProgress = document.querySelector("#agent-progress");
+const agentPhase = document.querySelector("#agent-phase");
+const agentStep = document.querySelector("#agent-step");
+const optionViews = new Map();
+
+function optionSnapshot() {
+  const shot = currentShot();
+  if (!shot) return null;
+  const {showStandIns, ...cameraSetup} = shot;
+  return JSON.stringify(cameraSetup);
+}
+
+function markCurrentOption() {
+  if (!optionViews.size) return;
+  const snapshot = selectedRoom && optionSnapshot();
+  for (const [card, view] of optionViews) {
+    const active = Boolean(view.snapshot && view.room === selectedRoom && view.snapshot === snapshot);
+    if (active) card.setAttribute("aria-current", "true");
+    else card.removeAttribute("aria-current");
+    view.indicator.hidden = !active;
+  }
+}
+
+document.querySelector("#viewport").addEventListener("shotpose", markCurrentOption);
 const agentActivity = document.querySelector("#agent-activity");
 const projectForm = document.querySelector("#project-form");
 const projectList = document.querySelector("#project-list");
@@ -1039,6 +1064,7 @@ async function restoreSelection(selection) {
   importMesh.hidden = true;
   importMesh.disabled = retryMesh.disabled = false;
   selectedRoom = undefined;
+  markCurrentOption();
   closeMesh();
   roomPicker.hidden = canvas.hidden = capture.hidden = tools.hidden = rigWidth.hidden = planViewTools.hidden = true;
   setSidebarVisible(true);
@@ -1054,7 +1080,7 @@ async function restoreSelection(selection) {
 
 async function openCheckedProposal(room, setup, requireCapture = false) {
   const previous = selectionSnapshot();
-  const opening = inspectRoom({name: room.label || room.modelId}, room.modelId, room.roomId, setup);
+  const opening = inspectRoom({name: room.label || room.modelId}, room.modelId, room.roomId, {...setup, showStandIns: true});
   const request = roomRequest;
   const opened = await opening;
   if (request !== roomRequest || request.signal.aborted)
@@ -1074,6 +1100,7 @@ async function openCheckedProposal(room, setup, requireCapture = false) {
 function agentSettings() {
   const inputs = new FormData(agentForm);
   return {brief: inputs.get("brief"), lens: inputs.get("lens"), lockedMove: inputs.get("locked-move"), targetTravel: inputs.get("target-travel"), minimumTravel: inputs.get("minimum-travel"),
+    city: inputs.get("city"), category: inputs.get("category"),
     shortlistOnly: inputs.has("shortlist-only"), lockRoom: inputs.has("lock-room"), requireSightlines: inputs.has("require-sightlines"), apply: inputs.has("apply")};
 }
 
@@ -1086,6 +1113,8 @@ function setAgentSettings(settings = {}) {
   agentForm.elements["import-outlines"].checked = false;
   agentForm.elements.brief.value = settings.brief ?? "";
   agentForm.elements.lens.value = settings.lens ?? "";
+  agentForm.elements.city.value = settings.city ?? "";
+  agentForm.elements.category.value = settings.category ?? "";
   agentForm.elements["locked-move"].value = settings.lockedMove ?? "";
   agentForm.elements["target-travel"].value = settings.targetTravel ?? "";
   agentForm.elements["minimum-travel"].value = settings.minimumTravel ?? "";
@@ -1274,6 +1303,8 @@ const inferredFields = new Map();
 const manuallyEdited = new Set();
 
 function clearAgentResults() {
+  optionViews.clear();
+  agentProgress.hidden = true;
   agentOptions.replaceChildren();
   agentEvidence.replaceChildren();
   agentActivity.replaceChildren();
@@ -1300,8 +1331,8 @@ function scoutingConstraints() {
     currentRoomId: lockRoom ? selectedRoom?.roomId ?? null : null,
     catalogFilters: shortlisted ? {} : {
       confirmedOnly: form.elements.imported.checked,
-      city: form.elements.city.value,
-      category: form.elements.category.value,
+      city: inputs.get("city") || form.elements.city.value,
+      category: inputs.get("category") || form.elements.category.value,
     },
   };
 }
@@ -1387,6 +1418,13 @@ reviewButton.addEventListener("click", async () => {
     }
     interpretedBrief = {brief, message: reviewMessage};
   }
+  for (const [name, value] of Object.entries(briefLocationFilters(brief))) {
+    const field = agentForm.elements[name];
+    if (value && !field.value && !form.elements[name].value && !manuallyEdited.has(name)) {
+      field.value = value;
+      inferredFields.set(name, field.value);
+    }
+  }
   const constraints = scoutingConstraints();
   if (!constraints.brief || (constraints.shortlist && !constraints.shortlist.length) ||
       (constraints.lockedRoom && (!constraints.currentModel || !currentShot()))) {
@@ -1426,7 +1464,8 @@ reviewButton.addEventListener("click", async () => {
   agentResult.textContent = reviewMessage;
 });
 
-function renderAgentOptions(options, tradeoff, {initialRoom, initialShot}) {
+function renderAgentOptions(options, tradeoff, {initialRoom, initialShot, brief}) {
+  optionViews.clear();
   agentOptions.replaceChildren();
   if (!options.length) {
     if (tradeoff) {
@@ -1445,15 +1484,45 @@ function renderAgentOptions(options, tradeoff, {initialRoom, initialShot}) {
   for (const [index, option] of options.entries()) {
     const {room, setup, report, opened} = option;
     const card = element("article", "");
-    const label = room ? roomName(room.label, room.roomId) : "Current room";
-    card.append(element("h3", (index === 0 ? "Recommended" : "Alternative " + index) + " · " + label));
+    let label = room ? roomName(room.label, room.roomId) : "Current room";
+    const heading = element("h3", "");
+    const address = element("p", "");
+    address.hidden = true;
+    const title = index === 0 ? "Recommended" : "Alternative " + index;
+    const indicator = element("p", "In the shot editor");
+    indicator.className = "agent-current";
+    indicator.hidden = true;
+    const view = {room: opened ? selectedRoom : null,
+      snapshot: opened ? optionSnapshot() : null, indicator};
+    optionViews.set(card, view);
+    const updateHeading = () => { heading.textContent = title + " · " + label; };
+    updateHeading();
+    card.append(heading, address, indicator);
+    const model = room?.modelId ?? initialRoom?.modelId;
+    if (model) {
+      const params = new URLSearchParams({model});
+      fetch("/api/scan-property?" + params).then(response => response.ok ? response.json() : null)
+        .then(result => {
+          if (!card.isConnected || !result?.property) return;
+          address.textContent = propertyLabel(result.property);
+          address.hidden = !address.textContent;
+        }).catch(() => {});
+      if (room) fetch("/api/rooms?" + params).then(response => response.ok ? response.json() : [])
+        .then(choices => {
+          const roomIndex = choices.findIndex(choice => choice.id === (room.roomId ?? null));
+          if (!card.isConnected || roomIndex < 0) return;
+          label = roomNames(choices)[roomIndex];
+          updateHeading();
+        }).catch(() => {});
+    }
+    const moves = {slide: "Lateral slide", push: "Push-in", pull: "Pull-back", static: "Static"};
+    card.append(element("p", [report.lens + " mm", moves[report.move], report.travel.toFixed(2) + " m travel"].filter(Boolean).join(" · ")));
     const measurements = [
-      report.travel.toFixed(2) + " m of travel",
       Number.isFinite(report.framingMargin) ? Math.floor(report.framingMargin * 100) + "% tightest frame margin" : "Frame margin unavailable",
       report.sightlinesSampled ? "Captured sightlines checked" : "Captured sightlines unverified",
-    ];
+      /\b(?:natural light(?:ing)?|daylight|sunlight)\b/i.test(brief) ? "Natural light unverified" : "",
+    ].filter(Boolean);
     card.append(element("p", measurements.join(" · ")));
-    if (opened) card.append(element("p", "Opened in the shot editor."));
     const open = element("button", "Open shot");
     open.type = "button";
     open.addEventListener("click", async () => {
@@ -1464,9 +1533,12 @@ function renderAgentOptions(options, tradeoff, {initialRoom, initialShot}) {
         else {
           if (selectedRoom !== initialRoom || JSON.stringify(currentShot()) !== initialShot)
             throw Error("The original shot changed. Investigate the current shot again before applying this revision.");
-          applyCurrentShot(setup);
+          applyCurrentShot({...setup, showStandIns: true});
         }
-        agentResult.textContent = "Opened the tested shot in " + label + ".";
+        view.room = selectedRoom;
+        view.snapshot = optionSnapshot();
+        markCurrentOption();
+        agentResult.textContent = "Opened the tested shot in " + roomTitle.textContent + ".";
       } catch (error) {
         agentResult.textContent = error.message;
       } finally {
@@ -1476,6 +1548,7 @@ function renderAgentOptions(options, tradeoff, {initialRoom, initialShot}) {
     card.append(open);
     agentOptions.append(card);
   }
+  markCurrentOption();
 }
 
 agentForm.addEventListener("submit", async event => {
@@ -1502,7 +1575,10 @@ agentForm.addEventListener("submit", async event => {
   button.disabled = true;
   clearAgentResults();
   agentTests.hidden = false;
-  agentResult.textContent = "Investigating the shot…";
+  agentResult.textContent = "";
+  agentProgress.hidden = false;
+  agentPhase.textContent = constraints.lockedRoom ? "Planning a revision" : "Finding rooms";
+  agentStep.textContent = "";
   try {
     const prior = initialRoom
       ? " Current editor: " + roomName(initialRoom.label, initialRoom.roomId) +
@@ -1510,6 +1586,7 @@ agentForm.addEventListener("submit", async event => {
       : "";
     agentResult.textContent = await runAgent(constraints.brief + prior, {
       ...constraints,
+      autoBaseline: true,
       currentModel: initialRoom?.modelId,
       current: previousShot && {roomId: initialRoom?.roomId, lens: previousShot.lens, travel: previousShot.travel,
         sensorWidthMm: previousShot.sensorWidthMm, cameraHeight: previousShot.cameraHeight, rigRadius: previousShot.rigRadius,
@@ -1573,11 +1650,15 @@ agentForm.addEventListener("submit", async event => {
         }
       },
       onResults: ({options, tradeoff}) => {
-        renderAgentOptions(options, tradeoff, {initialRoom, initialShot});
+        renderAgentOptions(options, tradeoff, {initialRoom, initialShot, brief: constraints.brief});
       },
       activity: text => {
         agentActivity.append(element("li", text));
-        agentResult.textContent = text;
+        if (text.startsWith("Testing") || text.startsWith("Checked") || text.startsWith("Retried"))
+          agentPhase.textContent = "Testing shots";
+        else if (text.startsWith("Preparing") || text.startsWith("Queued"))
+          agentPhase.textContent = "Opening a shot";
+        agentStep.textContent = text;
       },
       apply: async (room, setup, requireCapture) => {
         if (reviewedBrief !== confirmation || JSON.stringify(scoutingConstraints()) !== confirmation)
@@ -1585,7 +1666,7 @@ agentForm.addEventListener("submit", async event => {
         if (expectedRoom !== selectedRoom || expectedShot !== JSON.stringify(currentShot()))
           throw Error("The open setup changed during scouting. Your changes were kept.");
         if (!room) {
-          applyCurrentShot(setup);
+          applyCurrentShot({...setup, showStandIns: true});
           applied = true;
           previousRoom = {...initialRoom, proposedShot: previousShot};
           undoAgent.hidden = false;
@@ -1613,6 +1694,7 @@ agentForm.addEventListener("submit", async event => {
   } catch (error) {
     agentResult.textContent = error.message;
   } finally {
+    agentProgress.hidden = true;
     button.disabled = reviewedBrief !== JSON.stringify(scoutingConstraints());
     projectLocked = false;
     openProject.disabled = false;

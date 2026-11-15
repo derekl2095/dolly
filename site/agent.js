@@ -51,6 +51,27 @@ export function briefSuggestions(brief) {
   };
 }
 
+export function briefLocationFilters(brief) {
+  const places = [
+    ["Los Angeles", /\b(?:Los Angeles|L\.?A\.?)\b/i],
+    ["Houston", /\bHouston\b/i],
+  ];
+  const types = [
+    ["office", /\boffices?\b/i],
+    ["industrial warehouse", /\b(?:industrial|warehouses?)\b/i],
+    ["retail", /\bretail\b/i],
+    ["flex", /\bflex\b/i],
+    ["hotel hospitality", /\b(?:hotel|hospitality)\b/i],
+    ["apartment multifamily", /\b(?:apartments?|multifamily)\b/i],
+    ["land", /\b(?:vacant land|land parcel)\b/i],
+  ];
+  const pick = entries => {
+    const matches = entries.filter(([, pattern]) => pattern.test(brief));
+    return matches.length === 1 ? matches[0][0] : null;
+  };
+  return {city: pick(places), category: pick(types)};
+}
+
 export async function reviewShotBrief(brief, {api = request, signal} = {}) {
   const properties = {
     move: {enum: ["slide", "push", "pull", "static", null]},
@@ -93,7 +114,7 @@ export async function reviewShotBrief(brief, {api = request, signal} = {}) {
   };
 }
 
-export async function runAgent(brief, {activity, apply, lockedLens = null, lockedMove = null, allowApply, current, revise, lockedRoom, requireSightlines = false, minimumTravel = 0, targetTravel = null, shortlist = null, currentModel, catalogFilters = {}, onEvidence = () => {}, onAlternatives = () => {}, onResults = () => {}, allowImport = false, api = request}) {
+export async function runAgent(brief, {activity, apply, lockedLens = null, lockedMove = null, allowApply, current, revise, lockedRoom, requireSightlines = false, minimumTravel = 0, targetTravel = null, shortlist = null, currentModel, catalogFilters = {}, onEvidence = () => {}, onAlternatives = () => {}, onResults = () => {}, allowImport = false, autoBaseline = false, api = request}) {
   if (lockedMove !== null && !["slide", "push", "pull", "static"].includes(lockedMove))
     throw Error("Unsupported camera move lock.");
   if (targetTravel !== null && (!Number.isFinite(targetTravel) || targetTravel < minimumTravel || targetTravel > 4))
@@ -113,6 +134,7 @@ export async function runAgent(brief, {activity, apply, lockedLens = null, locke
   const importErrors = new Map();
   const retried = new Set();
   const captureAttempts = new Map();
+  const baselineScans = new Set();
   const importTools = new Set(["import_capture_outline", "prepare_capture"]);
   const availableTools = allowImport ? tools : tools.filter(tool => !importTools.has(tool.function.name));
 
@@ -192,6 +214,7 @@ export async function runAgent(brief, {activity, apply, lockedLens = null, locke
     "New-room comparisons check walls, marked furniture and sampled framing, with optional sampled sightlines against aligned scans. Current-room revisions also check marked furniture and require sampled mesh sightlines when the editor enables that option.",
     "compare_setups ranks by constraint compliance, distance from the crew’s target travel when set, otherwise requested travel shortfall, sampled sightlines, rig clearance, and framing margin. Explain any choice that differs from that technical ranking using the crew’s stated preferences.",
     "Interpret the brief in concrete technical terms and preserve the director’s stated intent. For example, drift closer is a push-in; both actors must stay visible requires framing checks throughout. Do not invent numeric constraints from vague creative language or change actor marks, a specified lens or move as a workaround.",
+    autoBaseline ? "Scout automatically runs the first baseline shot from available room evidence. Read its measurements before choosing further checks. Find a playable shot before pursuing daylight preferences. Only study daylight with a supplied shoot date and time window." : "",
     "Use rejection counts to select the next test. For framing, try retry_candidate with back_up. For an obstruction, try a lateral shift or switch rooms. A retry keeps creative choices fixed. Treat a short or static fallback as a tradeoff and report its actual travel.",
     "When room choice is flexible, compare different rooms. Return a recommendation and up to two qualifying alternatives in distinct rooms. State the measured differences and what is still unverified.",
     "Preserve the user's creative intent. apply_shot queues a proposal. The editor opens it after you finish. Describe it as queued.",
@@ -223,7 +246,8 @@ export async function runAgent(brief, {activity, apply, lockedLens = null, locke
       nextSearchPage.set("offset", String(data.next_offset));
     }
     activity(`CoStar returned ${rows.length} properties at offset ${offset}.`);
-    return {rows, mode: data.mode, hasMore: Boolean(nextSearchPage)};
+    const baseline = await baselineFromSearch(rows);
+    return {rows, mode: data.mode, hasMore: Boolean(nextSearchPage), ...(baseline ? {baseline} : {})};
   }
 
   async function checkCandidate(room, {lens, move, travel, captured, trial, parent, adjustment}) {
@@ -242,6 +266,47 @@ export async function runAgent(brief, {activity, apply, lockedLens = null, locke
     candidates.set(id, {room, setup: result.setup, report, staging: result.staging, captured});
     activity(`${parent ? `Retried ${parent} (${adjustment}) in` : "Checked"} ${room.label || room.modelId} at ${lens} mm: ${result.reason}`);
     return report;
+  }
+
+  async function getRoom(model, roomId) {
+    const params = new URLSearchParams({model});
+    if (roomId != null) params.set("room", roomId);
+    const room = await api("/api/room?" + params);
+    rooms.set(key(model, roomId ?? null), room);
+    rooms.set(key(model, room.roomId ?? null), room);
+    if (!inspected.get(model)) inspected.set(model, 1);
+    activity(`Read the imported boundary and staging for ${room.label || room.modelId}.`);
+    return room;
+  }
+
+  async function baselineForRoom(room) {
+    if (!autoBaseline || lockedRoom || candidates.size ||
+        !actorMarks(room, loadShot(room)).every(Boolean)) return null;
+    const move = lockedMove ?? "slide";
+    const lens = lockedLens ?? current?.lens ?? 35;
+    const travel = move === "static" ? 0 : (targetTravel ?? Math.max(minimumTravel, .7));
+    activity(`Testing the first shot in ${room.label || room.modelId}.`);
+    return checkCandidate(room, {move, lens, travel, captured: requireSightlines});
+  }
+
+  async function baselineFromSearch(rows) {
+    if (!autoBaseline || lockedRoom || candidates.size || baselineScans.size >= 2) return null;
+    const scans = rows.flatMap(row => row.models).filter(([model, , readiness]) =>
+      !baselineScans.has(model) && (readiness?.roomCount || (allowImport && readiness?.remoteRoomCount)));
+    scans.sort((a, b) => Number(Boolean(b[2].roomCount)) - Number(Boolean(a[2].roomCount)));
+    if (!scans.length) return null;
+    const [model, , readiness] = scans[0];
+    baselineScans.add(model);
+    try {
+      if (!readiness.roomCount) {
+        await execute("inspect_location", {model});
+        if (!inspected.get(model)) await execute("import_capture_outline", {model});
+      }
+      return await baselineForRoom(await getRoom(model, null));
+    } catch (error) {
+      activity(`Could not test the first room in scan ${model}: ${error.message}`);
+      return null;
+    }
   }
 
   async function execute(name, args) {
@@ -296,21 +361,20 @@ export async function runAgent(brief, {activity, apply, lockedLens = null, locke
         return prepareCapture(args.model);
       case "get_room_evidence": {
         if (!seen.has(args.model)) throw Error("Search for this model first.");
-        const params = new URLSearchParams({model: args.model});
-        if (args.room != null) params.set("room", args.room);
-        const room = await api("/api/room?" + params);
-        rooms.set(key(args.model, args.room ?? null), room);
-        if (!inspected.get(args.model)) inspected.set(args.model, 1);
-        activity(`Read the imported boundary and staging for ${room.label || room.modelId}.`);
+        const room = rooms.get(key(args.model, args.room ?? null)) ??
+          await getRoom(args.model, args.room);
+        const baseline = await baselineForRoom(room);
         const {xSpan, zSpan, area} = outlineMeasurements(room.outline);
         return {label: room.label, outlineMeters: {xSpan, zSpan, areaSquareMeters: area}, vertices: room.outline.length, height: room.heightEstimated ? null : room.height,
           actors: actorMarks(room, loadShot(room)).filter(Boolean).length, source: room.geometrySource || "Imported Matterport outline",
           staging: room.staging || "provisional",
           meshAvailable: room.matterpakAvailable === true || undefined,
           meshAlignmentVerified: room.matterpakAlignmentVerified === true,
-          alignmentEvidence: room.alignmentEvidence};
+          alignmentEvidence: room.alignmentEvidence, ...(baseline ? {baseline} : {})};
       }
       case "study_daylight": {
+        if (autoBaseline && !candidateReports().some(candidate => candidate.status === "qualifies"))
+          throw Error("Find a playable shot before checking daylight. Treat natural light as unverified until then.");
         const room = rooms.get(key(args.model, args.room ?? null));
         if (!room) throw Error("Read the room evidence first.");
         const start = Date.parse(args.start);
@@ -338,8 +402,11 @@ export async function runAgent(brief, {activity, apply, lockedLens = null, locke
         const move = args.move ?? lockedMove ?? "slide";
         if (lockedMove && move !== lockedMove) throw Error("The camera move is locked.");
         if (!["slide", "push", "pull", "static"].includes(move)) throw Error("Unsupported camera move.");
-        return checkCandidate(room, {lens: args.lens, move, travel: args.slide,
-          captured: requireSightlines || args.requireSightlines === true});
+        const captured = requireSightlines || args.requireSightlines === true;
+        const existing = [...candidates.values()].find(item => item.room === room && !item.report.parent &&
+          item.report.lens === args.lens && item.report.move === move && item.report.requested === args.slide &&
+          item.captured === captured);
+        return existing?.report ?? checkCandidate(room, {lens: args.lens, move, travel: args.slide, captured});
       }
       case "retry_candidate": {
         const parent = candidates.get(args.candidate);
@@ -509,7 +576,7 @@ export async function runAgent(brief, {activity, apply, lockedLens = null, locke
       return automatic && proposal ? summary + ` Opened ${proposal.report.id}, the top qualifying technical match.` : summary;
     }
     if (calls.length > 4) return finishIncomplete("The model requested too many tools at once.");
-    messages.push({role: "assistant", content: response.content ?? null, tool_calls: calls});
+    messages.push({...response, role: "assistant", content: response.content ?? null, tool_calls: calls});
     for (const call of calls) {
       let result;
       try {
