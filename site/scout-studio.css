@@ -36,19 +36,20 @@ main {
   border-bottom: 1px solid var(--line);
 }
 .studio-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   color: var(--ink);
   font: 400 2.25rem/1 var(--display);
   text-decoration: none;
 }
-.studio-brand span, h1 span { color: var(--accent); }
-.studio-header nav { display: flex; flex-wrap: wrap; gap: 8px 22px; }
-.studio-header nav a {
-  color: var(--muted);
-  text-decoration: none;
-  font-size: .875rem;
-  font-weight: 600;
-}
-.studio-header nav a:hover { color: var(--ink); text-decoration: underline; }
+.studio-brand img { display: block; flex: none; }
+h1 span { color: var(--accent); }
+.studio-header nav { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 18px; }
+.studio-header nav button { min-height: 32px; padding: 4px 9px; font-size: .8rem; }
+main:not(:has(#workspace[data-searched] > aside:not([hidden]))) #back-to-results,
+main:not(:has(#workspace[data-browse])) #back-to-results .to-shot,
+main:has(#workspace[data-browse]) #back-to-results .to-results { display: none; }
 
 .scouting-intro {
   display: grid;
@@ -70,7 +71,6 @@ main {
   padding: 24px 18px;
 }
 #workspace:has(#plan:not([hidden])) h1 { font-size: clamp(40px, 4vw, 64px); }
-#workspace:has(#plan:not([hidden])) .intro-break { display: none; }
 
 h2 { font: 400 clamp(32px, 4vw, 56px)/1.03 var(--display); }
 h3 { font-size: 1.08rem; line-height: 1.3; }
@@ -303,11 +303,15 @@ a { color: var(--accent); text-underline-offset: .18em; }
   gap: 12px;
 }
 #transport .camera-fields label { display: grid; grid-template-columns: minmax(0, 1fr) auto; }
-.camera-fields input[type="range"], .camera-fields select { grid-column: 1 / -1; grid-row: 2; }
+.camera-fields input, .camera-fields select { grid-column: 1 / -1; grid-row: 2; }
+.camera-fields input[type="number"] { width: 100%; }
 .camera-fields output { grid-column: 2; grid-row: 1; }
 #transport .camera-fields input[type="range"] { width: 100%; }
 .camera-options { display: flex; flex-wrap: wrap; gap: 6px 12px; padding-top: 12px; }
 .camera-options label { font-size: .85rem; }
+.visibility-control { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--line); }
+.visibility-control label { min-height: 24px; font-size: .85rem; }
+.visibility-control .planning-help { margin: 2px 0 0 25px; color: var(--muted); font-size: .8rem; }
 .capture-tools { border-top: 1px solid var(--line); margin-top: 12px; }
 .room-header {
   display: flex;
@@ -318,6 +322,19 @@ a { color: var(--accent); text-underline-offset: .18em; }
   border-bottom: 1px solid var(--line);
   padding-bottom: 8px;
 }
+.room-header > :first-child { min-width: 0; flex: 1 1 240px; }
+.room-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.room-actions #room-picker:not([hidden]) { display: flex; align-items: center; gap: 8px; margin: 0; }
+.room-actions #room-picker select { min-width: 0; }
+.sidebar-toggle { min-height: 32px; min-width: 32px; padding: 0 6px; font-size: 1.15rem; line-height: 1; }
+.scouting { position: relative; }
+#collapse-scouting { position: absolute; top: 10px; right: 10px; }
+#workspace:not(:has(> aside:not([hidden]))) #collapse-scouting,
+#workspace[data-browse] #collapse-scouting { display: none; }
+.blocking-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.blocking-controls button { min-height: 34px; }
+.blocking-extras { flex-basis: 100%; border-top: 1px solid var(--line); padding-top: 8px; }
+.blocking-extras[open] .blocking-controls { margin-top: 8px; }
 #room-location { margin: 0 0 8px; color: var(--muted); font-size: .9rem; }
 #room-status:empty { margin: 0; }
 #room-geometry { color: var(--muted); font-size: .875rem; }
@@ -326,6 +343,23 @@ a { color: var(--accent); text-underline-offset: .18em; }
 .plan-view-tools button { min-height: 34px; padding: 5px 8px; font-size: .8rem; }
 #plan.panning { cursor: grab; }
 #plan.panning:active { cursor: grabbing; }
+#plan.orbiting { cursor: grab; }
+#plan.orbiting:active { cursor: grabbing; }
+.plan-canvas-wrap { position: relative; }
+.plan-zoom { position: absolute; top: 8px; right: 8px; display: grid; gap: 3px; }
+.plan-zoom button { min-width: 32px; min-height: 32px; padding: 0; }
+.plan-heights { display: grid; grid-template-columns: repeat(auto-fit, minmax(104px, 1fr)); gap: 8px; width: 100%; }
+.height-field { display: grid; grid-template-rows: auto 28px auto; gap: 4px; font-size: .8rem; }
+.height-field input[type="range"] { width: 100%; padding-inline: 0; margin: 0; }
+.height-field .height-number { display: flex; align-items: center; gap: 4px; color: var(--muted); }
+.height-number input[type="number"] { width: 70px; min-height: 30px; padding: 3px 6px; color: var(--accent); }
+.furniture-tools { padding: 0 10px 8px; }
+#furniture-sizing { display: flex; gap: 8px; align-items: end; flex-wrap: wrap; width: 100%; }
+#furniture-sizing label { display: grid; gap: 4px; font-size: .8rem; }
+#furniture-height { width: 82px; }
+#delete-furniture { min-height: 42px; color: #ffb6a5; }
+#pan-plan { display: inline-grid; place-items: center; min-width: 34px; }
+#plan-instructions { margin: 0; padding: 0 10px 10px; color: var(--muted); font-size: .8rem; }
 #pan-plan[aria-pressed="true"]:hover { background: var(--accent-hover); color: var(--accent-ink); }
 #delete-project { margin-left: auto; }
 #delete-project-confirmation { margin-top: 12px; }
@@ -345,6 +379,11 @@ a { color: var(--accent); text-underline-offset: .18em; }
   background: var(--panel);
   border-left: 2px solid var(--control-line);
 }
+#fit-planning { border-top: 1px solid var(--line); margin-top: 12px; padding-top: 9px; }
+#fit-planning > summary { font-size: .9rem; font-weight: 600; }
+#fit-planning .planning-help { color: var(--muted); font-size: .825rem; margin: 6px 0; }
+#fit-planning > button { margin-top: 5px; }
+#revision:not(:empty) { margin: 10px 0 0; }
 #clearance, #ceiling, #framing, #sightline, #render-status, #alignment-status, #revision {
   font-size: .875rem;
 }
@@ -392,7 +431,6 @@ main:not(:has(#workspace[data-searched], #workspace > aside:not([hidden]))) {
       url("scout-set.jpg?v=3") center / cover no-repeat, #292620;
   }
   & .studio-header { background: transparent; border-color: #fff3; }
-  & .studio-header nav a { color: var(--ink); }
   & #workspace.layout { grid-template-columns: minmax(0, 1fr); }
   & .scouting { border: 0; }
   & .scouting-hero {
@@ -413,7 +451,6 @@ main:not(:has(#workspace[data-searched], #workspace > aside:not([hidden]))) {
     font-size: clamp(64px, 12vw, 188px);
     text-shadow: 0 3px 28px #100d0d90;
   }
-  & .intro-break { display: none; }
   & #scout-search {
     width: min(100%, 1050px);
     box-sizing: border-box;
@@ -465,7 +502,6 @@ main:not(:has(#workspace[data-searched], #workspace > aside:not([hidden]))) {
 }
 
 /* Search results take the full workspace until a room is opened. */
-main:not(:has(#workspace > aside:not([hidden]))) .studio-header a[href="#room-title"] { display: none; }
 #workspace[data-searched]:is([data-browse], :has(> aside[hidden])) {
   grid-template-columns: minmax(0, 1fr);
   & .scouting { border: 0; }
@@ -478,7 +514,6 @@ main:not(:has(#workspace > aside:not([hidden]))) .studio-header a[href="#room-ti
   }
   & .scouting-intro { min-height: auto; padding: 0; background: none; }
   & .scouting-intro h1 { font-size: clamp(43px, 6vw, 84px); }
-  & .intro-break { display: none; }
   & #scout-search { margin: 0; padding: 0; max-width: 1050px; }
   & #status { margin: 0; color: var(--ink); }
   & .scouting > :is(details, #results, #more-locations) { margin-inline: 0; }
@@ -498,9 +533,10 @@ main:not(:has(#workspace > aside:not([hidden]))) .studio-header a[href="#room-ti
     border-radius: 8px;
     background: var(--panel);
   }
-  & #results article select { margin-top: auto; }
 }
-.location-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.location-controls { margin-top: auto; padding-top: 4px; }
+.location-controls > select { width: 100%; }
+.location-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; margin-top: 8px; }
 #results .location-actions button { margin: 0; }
 .location-actions button:first-child {
   background: var(--accent);
@@ -512,12 +548,23 @@ main:not(:has(#workspace > aside:not([hidden]))) .studio-header a[href="#room-ti
   margin: 5px 0 0;
   font-size: .78rem;
 }
-#workspace #results article[aria-current="true"] {
+#workspace #results article:is([aria-current="true"], .map-selected) {
   background: #352a23;
   border-color: #805f49;
   box-shadow: inset 3px 0 var(--accent);
   border-radius: 8px;
   padding-inline: 12px;
+}
+#workspace #results article.map-selected {
+  border-color: var(--accent);
+}
+#draw-curve[aria-pressed="true"]:hover { background: var(--accent-hover); color: var(--accent-ink); }
+#results .property-details { margin: 0 0 8px; color: var(--muted); font-size: .8rem; }
+#results .property-details summary { padding: 2px 0; }
+#results .property-details > p { margin-top: 6px; }
+.scout-map-pin.map-selected {
+  background: var(--accent-hover);
+  box-shadow: 0 0 0 3px #f3b99096, 0 0 0 7px #f3b99040;
 }
 @media (min-width: 850px) {
   #workspace[data-searched]:is([data-browse], :has(> aside[hidden])) #scout-search {
@@ -545,7 +592,6 @@ main:not(:has(#workspace > aside:not([hidden]))) .studio-header a[href="#room-ti
 .project-files label { display: grid; gap: 4px; margin-bottom: 8px; }
 #project-status:empty { display: none; }
 #project-status:not(:empty) { margin: 8px 0 0; }
-#workspace:not([data-searched]) #back-to-results,
 #workspace[data-browse] > aside,
 #workspace:not([data-browse]):has(> aside:not([hidden])) #location-map-panel { display: none; }
 #location-map-panel { min-width: 0; overflow: hidden; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }

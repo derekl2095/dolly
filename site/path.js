@@ -1,3 +1,5 @@
+import {maxActors} from "./room-state.js?v=spatial-plan";
+
 export function easedPathFraction(timeFraction) {
   return timeFraction * timeFraction * (3 - 2 * timeFraction);
 }
@@ -246,7 +248,7 @@ export function readShotExport(text) {
       typeof shot.modelId !== "string" || !/^[A-Za-z0-9]{1,40}$/.test(shot.modelId) ||
       (shot.roomId != null && (typeof shot.roomId !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(shot.roomId))) ||
       ![shot.start, shot.end, shot.aim].every(point) ||
-      !Array.isArray(shot.actors) || shot.actors.length !== 2 ||
+      !Array.isArray(shot.actors) || shot.actors.length < 2 || shot.actors.length > maxActors ||
       !shot.actors.every(actor => actor === null || point(actor)) ||
       (shot.aimHeight != null && !bounded(shot.aimHeight, 0, 100)) ||
       !bounded(shot.cameraHeight, .15, 4) || !bounded(shot.sensorWidthMm, 8, 65) ||
@@ -255,6 +257,7 @@ export function readShotExport(text) {
       !Array.isArray(shot.aspect) || shot.aspect.length !== 2 || shot.aspect[0] !== 16 || shot.aspect[1] !== 9 ||
       !Array.isArray(shot.obstacles) || !shot.obstacles.every(item =>
         item && typeof item.name === "string" && point(item.min) && point(item.max) &&
+        (item.height == null || bounded(item.height, 0, 12)) &&
         item.min.every((value, index) => value < item.max[index]))) {
     throw Error("This file is not a supported shot export.");
   }

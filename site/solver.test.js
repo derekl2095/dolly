@@ -4,6 +4,34 @@ import test from "node:test";
 import {editorShotState, readShotExport, roundStroke, slideEndpoints, tracePath} from "./path.js";
 import {solveShot} from "./solver.js";
 import {compareRooms} from "./compare.js";
+import {planProjection} from "./plan-projection.js";
+import {capturedSpaceLabel, cleanPropertyDescription, listedArea, spaceLabel} from "./location-labels.js";
+
+test("catalog labels use room names and omit tour marketing", () => {
+  assert.equal(spaceLabel("Checkout Out Our Model!"), "");
+  assert.equal(spaceLabel("Matterport Virtual Tour – Showroom"), "Showroom");
+  assert.equal(spaceLabel("3D Tour of Training Room"), "Training Room");
+  assert.equal(spaceLabel("Training Room (3D)"), "Training Room");
+  assert.equal(spaceLabel("3D - Suite West"), "Suite West");
+  assert.equal(cleanPropertyDescription("[Canal] [Street] Flats", "Canal Street Flats"), "");
+  assert.equal(cleanPropertyDescription("Near [Canal] Street."), "Near Canal Street.");
+  assert.equal(spaceLabel("2BR, 2BA - 1015 SqFt (B3)"), "2BR, 2BA (B3)");
+  assert.equal(spaceLabel("2BR,2BA_1,124 Sq Ft"), "2BR,2BA");
+  assert.equal(listedArea("2BR, 2BA - 1015 SqFt (B3)"), "1,015 sq ft");
+  assert.equal(capturedSpaceLabel(["Closet", "Bedroom", "Bedroom", "Dining Room"]
+    .map(label => ({label}))), "Bedroom / Dining Room");
+});
+
+test("rotated room projection preserves floor and elevated drag coordinates", () => {
+  const view = planProjection({center: [4, 3], origin: [320, 200], scale: 44,
+    bearing: -.7, elevation: Math.PI / 3});
+  const point = [7, 1.5];
+  for (const height of [0, 1.42, 2.5]) {
+    const world = view.unproject(view.project(point, height), height);
+    assert.ok(Math.hypot(world[0] - point[0], world[1] - point[1]) < 1e-10);
+  }
+  assert.ok(view.project(point, 2.5)[1] < view.project(point)[1]);
+});
 
 const shot = {
   lens: 35, sensorWidthMm: 36, cameraHeight: 1.42, rigRadius: .25,
@@ -18,11 +46,13 @@ test("a drawn curve plays by distance and survives a shot export", () => {
   assert.ok(curve.at(.5)[1] > .9);
   const payload = {schemaVersion: 1, units: "meters", interpolation: "smoothstep",
     modelId: "fixture", moveKind: "curve", start: curve.at(0), end: curve.at(1),
-    pathPoints, aim: [1, 2], actors: [null, null], focalLengthMm: 35,
+    pathPoints, aim: [1, 2], actors: [[1, 1], [1.5, 1], [2, 1]], focalLengthMm: 35,
     cameraHeight: 1.42, sensorWidthMm: 36, rigRadius: .25, durationSeconds: 3.8,
-    aspect: [16, 9], obstacles: []};
+    aspect: [16, 9], obstacles: [{name: "Chair", min: [1, 2], max: [2, 3], height: .85}]};
   const {setup} = readShotExport(JSON.stringify(payload));
   assert.deepEqual(setup.pathPoints, pathPoints);
+  assert.deepEqual(setup.actors, payload.actors);
+  assert.deepEqual(setup.obstacles, payload.obstacles);
   assert.equal(setup.travel, curve.travel);
   assert.throws(() => readShotExport(JSON.stringify({...payload, end: [1, 1]})), /curve is invalid/);
   assert.equal(tracePath([[0, 0], [0, 3], [1, 0]]), null);

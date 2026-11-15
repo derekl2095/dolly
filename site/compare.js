@@ -1,14 +1,14 @@
-import {loadSightlines} from "./sightlines.js";
-import {actorMarks, loadObstacles, loadShot, shotSettings} from "./room-state.js";
-import {solveShot} from "./solver.js";
+import {loadSightlines} from "./sightlines.js?v=spatial-plan";
+import {actorCenter, actorMarks, loadObstacles, loadShot, shotSettings} from "./room-state.js?v=spatial-plan";
+import {solveShot} from "./solver.js?v=spatial-plan";
+import {isVoidRoom} from "./location-labels.js?v=room-polish";
 
 export function compareRooms(rooms, focal, requested, moveKind = "slide", evidence = new Map(), optics) {
-  return rooms.map(room => {
+  return rooms.filter(room => !isVoidRoom(room.label)).map(room => {
     const saved = loadShot(room);
     const actors = actorMarks(room, saved);
     const camera = saved?.mark || room.camera;
-    const aim = saved?.aim || room.lookAt || (actors.every(Boolean)
-      ? actors[0].map((value, index) => (value + actors[1][index]) / 2) : null);
+    const aim = saved?.aim || room.lookAt || actorCenter(actors);
     const cameraSettings = shotSettings(room, {...saved, ...optics});
     const obstacles = loadObstacles(room);
     const spatial = evidence.get(room);
@@ -38,7 +38,7 @@ export function compareRooms(rooms, focal, requested, moveKind = "slide", eviden
 export async function compareCapturedRooms(rooms, focal, requested, move, requireSightlines,
                                            load = loadSightlines, optics) {
   const results = [];
-  for (const room of rooms) {
+  for (const room of rooms.filter(room => !isVoidRoom(room.label))) {
     const evidence = requireSightlines ? await load(room) : {};
     try {
       results.push(compareRooms([room], focal, requested, move,

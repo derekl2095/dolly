@@ -1,5 +1,5 @@
-import {cameraMoveAxis, checkFraming, checkRigClearance, editorShotState, findSlide} from "./path.js";
-import {checkCameraHeight} from "./room-state.js";
+import {cameraMoveAxis, checkFraming, checkRigClearance, editorShotState, findSlide} from "./path.js?v=spatial-plan";
+import {actorCenter, checkCameraHeight, maxActors} from "./room-state.js?v=spatial-plan";
 
 const MOVES = new Set(["slide", "push", "pull", "static"]);
 
@@ -8,10 +8,10 @@ function finitePair(value) {
     ? [value[0], value[1]] : null;
 }
 
-function twoActors(value) {
-  if (!Array.isArray(value) || value.length < 2) return null;
-  const actors = [finitePair(value[0]), finitePair(value[1])];
-  return actors.every(Boolean) ? actors : null;
+function framingActors(value) {
+  if (!Array.isArray(value) || value.length > maxActors) return null;
+  const actors = value.filter(point => point != null).map(finitePair);
+  return actors.length >= 2 && actors.every(Boolean) ? actors : null;
 }
 
 function bounded(value, min, max) {
@@ -69,7 +69,7 @@ export function solveShot(room, constraints = {}) {
     return result("missing-evidence", {label: "Missing evidence: room outline",
       reason: "Room outline is missing.", missing: ["room outline"]});
 
-  const actors = twoActors(constraints.actors ?? room.actors);
+  const actors = framingActors(constraints.actors ?? room.actors);
   const mark = finitePair(constraints.mark ?? room.camera);
   if (!actors || !mark)
     return result("missing-evidence", {label: "Missing evidence: actor marks",
@@ -77,7 +77,7 @@ export function solveShot(room, constraints = {}) {
       missing: [...(actors ? [] : ["actors"]), ...(mark ? [] : ["camera"])]});
 
   const aim = finitePair(constraints.aim) || finitePair(room.lookAt) ||
-    actors[0].map((value, index) => (value + actors[1][index]) / 2);
+    actorCenter(actors);
   const aimHeight = bounded(constraints.aimHeight, 0, 100) ? constraints.aimHeight
     : bounded(room.aimHeight, 0, 100) ? room.aimHeight : 1.22;
   const ceiling = checkCameraHeight(room, cameraHeight);

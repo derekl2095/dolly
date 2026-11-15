@@ -1,5 +1,5 @@
-import {actorMarks, loadShot, outlineMeasurements} from "./room-state.js";
-import {compareCapturedRooms} from "./compare.js";
+import {actorMarks, loadShot, outlineMeasurements} from "./room-state.js?v=spatial-plan";
+import {compareCapturedRooms} from "./compare.js?v=room-polish";
 
 const definitions = [
   ["search_locations", "Search CoStar for properties including leads with no linked scan. Set importedOnly when you need rooms ready for geometry checks.", {query: {type: "string"}, city: {type: ["string", "null"]}, category: {type: ["string", "null"]}, importedOnly: {type: "boolean"}}],

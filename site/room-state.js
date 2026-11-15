@@ -31,10 +31,29 @@ export function loadObstacles(room) {
   return [];
 }
 
+export const maxActors = 8;
+export const standIn = Object.freeze({
+  bodyRadius: .17, bodyLength: 1.03, bodyCenter: .69, headRadius: .115, eyeHeight: 1.49,
+  colors: Object.freeze(["#b98c66", "#728d9f", "#819773", "#a289a5"]),
+});
+export const defaultFurnitureHeight = .75;
+
+export function furnitureHeight(obstacle) {
+  return Number.isFinite(obstacle.height) && obstacle.height >= 0 && obstacle.height <= 12
+    ? obstacle.height : defaultFurnitureHeight;
+}
+
 export function actorMarks(room, saved) {
   const validPoint = point => Array.isArray(point) && point.length === 2 && point.every(Number.isFinite);
   const points = Array.isArray(saved?.actors) ? saved.actors : room.actors;
-  return [0, 1].map(index => validPoint(points?.[index]) ? points[index].slice() : null);
+  const count = Math.max(2, Math.min(maxActors, points?.length || 0));
+  return Array.from({length: count}, (_, index) => validPoint(points?.[index]) ? points[index].slice() : null);
+}
+
+export function actorCenter(actors) {
+  const placed = actors.filter(Boolean);
+  if (!placed.length) return null;
+  return [0, 1].map(axis => placed.reduce((sum, point) => sum + point[axis], 0) / placed.length);
 }
 
 export function loadShot(room) {
