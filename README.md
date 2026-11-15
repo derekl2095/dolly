@@ -97,16 +97,37 @@ sightlines in the selected room before relying on a setup.
 
 ## Tool-calling scout
 
-Set SCOUT_MODEL_URL to the provider's Chat Completions endpoint and
-SCOUT_MODEL_NAME to a tool-capable model. Set SCOUT_MODEL_KEY if required.
-Keep the key in the server environment. Start or restart app.py after configuring it.
-For the OpenAI API, the existing adapter accepts these settings.
+### Gemini setup
 
-    SCOUT_MODEL_URL=https://api.openai.com/v1/chat/completions
-    SCOUT_MODEL_NAME=gpt-5.4-mini
+Create a Gemini API key in [Google AI Studio](https://aistudio.google.com/apikey).
+On the Mac running Scout, run this from the repo in Terminal. Paste the key
+at the hidden prompt.
 
-Set `SCOUT_MODEL_KEY` privately in the server environment before starting
-the app. See [GPT-5.4 mini](https://developers.openai.com/api/docs/models/gpt-5.4-mini).
+```zsh
+read -rs 'SCOUT_MODEL_KEY?Gemini API key: '; printf '\n'
+export SCOUT_MODEL_KEY
+export SCOUT_MODEL_URL="https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
+export SCOUT_MODEL_NAME="gemini-3.5-flash-lite"
+python3 app.py --port 8017
+```
+
+For Windows PowerShell, use the same endpoint and model.
+
+```powershell
+$env:SCOUT_MODEL_KEY = [System.Net.NetworkCredential]::new("", (Read-Host "Gemini API key" -AsSecureString)).Password
+$env:SCOUT_MODEL_URL = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
+$env:SCOUT_MODEL_NAME = "gemini-3.5-flash-lite"
+py -3 app.py --port 8017
+```
+
+Open [Scout](http://127.0.0.1:8017/), then try **Review brief** and
+**Investigate**. If you want to compare a stronger model, set
+`SCOUT_MODEL_NAME=gemini-3.8-flash` and restart Scout. Each person running
+their own server sets the key in their own shell. Keep API keys out of Git.
+
+Scout uses a Chat Completions endpoint. For OpenAI, set
+`SCOUT_MODEL_URL=https://api.openai.com/v1/chat/completions` and
+`SCOUT_MODEL_NAME=gpt-5.4-mini` with an OpenAI API key instead.
 
 The agent sends the shot brief and the CoStar and room evidence returned by its
 tools to the configured provider. Use a provider permitted to receive that data.
