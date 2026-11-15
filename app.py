@@ -23,9 +23,12 @@ from urllib.parse import parse_qs, unquote, urlsplit
 
 import daylight
 
-from catalog import build, coordinates_indexed, index_property_coordinates, scan_location, scan_property, search_page, source_mode
+from catalog import (
+    build, coordinates_indexed, index_property_coordinates, scan_location, scan_property, search_page,
+    source_mode, with_site_coordinates,
+)
 from fetch_matterpak import MAX_ARCHIVE_BYTES, MatterPakUnavailable, download_mesh, mesh_assets, stored_locally, unpack
-from import_room import DEFAULT_ASSETS, OPENINGS_QUERY, opening_candidates, import_measured_room, import_rooms, read_model, valid_id
+from import_room import DEFAULT_ASSETS, OPENINGS_QUERY, openings_on_outline, import_measured_room, import_rooms, read_model, valid_id
 from location_map import locate_property
 from model_provider import configured, next_turn
 
@@ -36,6 +39,29 @@ CAPTURE_CACHE = Path(os.environ.get("SCOUT_CAPTURE_CACHE", ROOT / "capture-cache
 
 def matterport_configured():
     return all(os.getenv(name) for name in ("MATTERPORT_API_KEY", "MATTERPORT_API_TOKEN"))
+
+
+def load_user_environment():
+    """Read user-level Windows variables this process did not inherit."""
+    if sys.platform != "win32":
+        return
+    import winreg
+    try:
+        key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment")
+    except OSError:
+        return
+    try:
+        for name in ("COSTAR_KIT", "MATTERPORT_API_KEY", "MATTERPORT_API_TOKEN"):
+            if os.environ.get(name):
+                continue
+            try:
+                value, _ = winreg.QueryValueEx(key, name)
+            except OSError:
+                continue
+            if isinstance(value, str) and value.strip():
+                os.environ[name] = value.strip()
+    finally:
+        winreg.CloseKey(key)
 
 
 def load_matterport_keychain():
@@ -253,8 +279,14 @@ class Handler(SimpleHTTPRequestHandler):
                     site = scan_location(self.server.database, model)
                 except sqlite3.Error:
                     site = None
+                located = None
+                if site and (site.get("latitude") is None or site.get("longitude") is None):
+                    try:
+                        located = locate_property(self.server.database, site["propertyId"])
+                    except (OSError, ValueError, KeyError, TimeoutError):
+                        located = None
                 return self.respond(200, {"status": status, "revision": revision, "profile": calibrated,
-                                          "locationDefaults": site})
+                                          "locationDefaults": with_site_coordinates(site, located)})
             if status != "ready":
                 return self.respond(200, {"status": "unknown", "reason": status + " daylight calibration", "frames": []})
             actors = data.get("actors", [])
@@ -341,13 +373,14 @@ class Handler(SimpleHTTPRequestHandler):
         room = self.server.room(model, room_id)
         if not room or room.get("roomId") != room_id:
             return self.respond(404, {"error": "Room not found."})
-        if not room_id or not matterport_configured() or not room.get("matterpakAlignmentVerified"):
+        if not matterport_configured() or not room.get("matterpakAlignmentVerified"):
             return self.respond(200, {"candidates": []})
         try:
             result = read_model(model, interactive=False, query=OPENINGS_QUERY)
             rooms = ((result.get("data") or {}).get("model") or {}).get("rooms") or []
-            vector = next((entry for entry in rooms if entry.get("id") == room_id), {})
-            candidates = opening_candidates(vector, room["outline"], room.get("matterpakFloorHeight", 0))
+            if room_id:
+                rooms = [entry for entry in rooms if entry.get("id") == room_id]
+            candidates = openings_on_outline(rooms, room["outline"], room.get("matterpakFloorHeight", 0))
         except (OSError, ValueError, TypeError, KeyError):
             candidates = []
         return self.respond(200, {"candidates": candidates})
@@ -460,12 +493,14 @@ class Handler(SimpleHTTPRequestHandler):
             path.parent.mkdir(parents=True, exist_ok=True)
             with tempfile.NamedTemporaryFile(mode="w", dir=path.parent, delete=False) as output:
                 temporary = Path(output.name)
-                try:
-                    json.dump(review, output)
-                    output.flush()
-                    temporary.replace(path)
-                finally:
-                    temporary.unlink(missing_ok=True)
+                json.dump(review, output)
+                output.flush()
+                output.close()
+            try:
+                temporary.replace(path)
+            except OSError:
+                temporary.unlink(missing_ok=True)
+                return self.respond(500, {"error": "Could not save the room alignment."})
         except OSError:
             return self.respond(500, {"error": "Could not save the room alignment."})
         return self.respond(200, review)
@@ -564,6 +599,7 @@ class Handler(SimpleHTTPRequestHandler):
 
 
 def main():
+    load_user_environment()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--db", type=Path, default=ROOT / "catalog.sqlite")
     parser.add_argument("--assets", type=Path, default=DEFAULT_ASSETS)

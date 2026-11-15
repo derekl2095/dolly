@@ -1,5 +1,5 @@
 import {createRelight} from "./relight.js?v=dark-panes";
-import {scanWindowCandidates} from "./window-detection.js?v=window-angles";
+import {scanWindowCandidates} from "./window-detection.js?v=mesh-gap9";
 async function request(path, options) {
   const response = await fetch(path, options);
   const data = await response.json();
@@ -256,8 +256,10 @@ export function mountDaylight({THREE, room, mesh, scene, renderer, fill, marks, 
       const data = await request("/api/window-candidates", {method: "POST",
         headers: {"Content-Type": "application/json"}, body: JSON.stringify(session), signal});
       if (signal.aborted || attempt !== generation) return;
-      const candidates = data.candidates.length ? data.candidates : scanWindowCandidates(THREE, room, mesh, renderer, relight.photoMaterial);
-      const modules = candidates.length ? await windowLines() : null;
+      const scanned = scanWindowCandidates(THREE, room, mesh, renderer, relight.photoMaterial, data.candidates);
+      const candidates = scanned.length ? [...scanned] : data.candidates;
+      const declined = scanned.rejected || [];
+      const modules = candidates.length || declined.length ? await windowLines() : null;
       if (signal.aborted || attempt !== generation) return;
       candidates.forEach((candidate, index) => {
         const {corners, outward, source} = candidate;
@@ -296,7 +298,15 @@ export function mountDaylight({THREE, room, mesh, scene, renderer, fill, marks, 
         }
         suggestions.append(row);
       });
-      status.textContent = candidates.length ? "Review the outlined candidates against the scan."
+      declined.forEach(candidate => {
+        if (!candidate.corners) return;
+        drawBox(previews, candidate.corners, 0xc47a4a, modules);
+        const row = document.createElement("li");
+        row.textContent = candidate.source || candidate.reason;
+        suggestions.append(row);
+      });
+      status.textContent = candidates.length
+        ? "Review " + candidates.length + " outlined candidates before saving. Rejected regions stay listed and are not added."
         : "No framed openings found. Clear or fully scanned glass may need four corners marked manually.";
       render();
     } catch (error) {
@@ -348,14 +358,16 @@ export function mountDaylight({THREE, room, mesh, scene, renderer, fill, marks, 
     }
     const site = saved.locationDefaults;
     const defaults = [];
-    for (const [key, label] of [["latitude", "latitude"], ["longitude", "longitude"], ["timeZone", "market time zone"]]) {
+    for (const [key, label] of [["latitude", "latitude"], ["longitude", "longitude"], ["timeZone", "market time zone"], ["heading", "plan +Z bearing"]]) {
       if (site?.[key] != null && form.elements[key].value === "") {
         form.elements[key].value = site[key];
         defaults.push(label);
       }
     }
+    const headingMissing = site && site.heading == null && form.elements.heading.value === "";
     panel.querySelector("#daylight-location-source").textContent = defaults.length
-      ? "Filled " + defaults.join(", ") + " from CoStar property " + site.propertyId + "."
+      ? "Filled " + defaults.join(", ") + " from CoStar property " + site.propertyId + "." +
+        (headingMissing ? " The plan's +Z bearing is not in that CoStar record." : "")
       : "";
     if (!form.elements.date.value) {
       const zone = form.elements.timeZone.value || undefined;

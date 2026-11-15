@@ -94,3 +94,10 @@ class DaylightTest(unittest.TestCase):
         self.assertEqual(len(candidates), 1)
         self.assertEqual(candidates[0]["outward"], [0, 0, -1])
         self.assertEqual(candidates[0]["corners"], [[3, 1, 0], [1, 1, 0], [1, 2, 0], [3, 2, 0]])
+        from import_room import openings_on_outline
+        elsewhere = {"boundary": {"edges": [{"type": "wall", "vertices": [
+            {"position": {"x": 20, "y": 0}}, {"position": {"x": 24, "y": 0}}],
+            "openings": [opening]}]}}
+        matched = openings_on_outline([elsewhere, {"boundary": {"edges": [edge]}}], outline, 2)
+        self.assertEqual(len(matched), 1)
+        self.assertEqual(matched[0]["source"], "Matterport opening test")

@@ -5,7 +5,10 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from catalog import build, inventory, search, search_page
+from catalog import (
+    build, index_property_coordinates, inventory, scan_location, search, search_page,
+    time_zone_for, with_site_coordinates,
+)
 from capture_status import local_status, probe
 from fetch_matterpak import stored_locally
 
@@ -45,6 +48,64 @@ class CatalogTests(unittest.TestCase):
             self.assertEqual(search_page(db, imported_models=set())["results"], [])
             filtered = search_page(db, imported_models={"ScanA"})
             self.assertEqual([row["models"] for row in filtered["results"]], [{"ScanA": "Loft"}])
+
+    def test_scan_location_reads_each_linked_address(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / "index.sqlite"
+            (root / "data").mkdir()
+            (root / "commercial-properties.csv").write_text(
+                "PropertyId,Address,City,State,MatterportModelId\n"
+                "10,100 Main St,Dallas,TX,ScanDallas\n"
+                "20,200 Pine St,Los Angeles,CA,ScanLa\n"
+                "30,300 Mesa St,El Paso,TX,\n",
+            )
+            dallas = {"streetNumber": 100, "streetName": "Main", "streetType": "St",
+                      "city": "Dallas", "state": "TX", "latitude": 32.7767, "longitude": -96.797}
+            los_angeles = {"streetNumber": 200, "streetName": "Pine", "streetType": "St",
+                           "city": "Los Angeles", "state": "CA", "latitude": 34.0522, "longitude": -118.2437}
+            el_paso = {"streetNumber": 300, "streetName": "Mesa", "streetType": "St",
+                       "city": "El Paso", "state": "TX"}
+            records = [
+                {"id": 10, "primaryAddress": dallas, "propertyType": 5,
+                 "attachments": [{"videoKey": "ScanDallas", "caption": "Lobby"}]},
+                {"id": 20, "primaryAddress": los_angeles, "propertyType": 5,
+                 "attachments": [{"videoKey": "ScanLa", "caption": "Suite"}]},
+                {"id": 30, "primaryAddress": el_paso, "propertyType": 5},
+            ]
+            (root / "data/commercial-property.jsonl").write_text("\n".join(map(json.dumps, records)))
+            build(db, root)
+            index_property_coordinates(db, root)
+            texas = with_site_coordinates(scan_location(db, "ScanDallas"))
+            california = with_site_coordinates(scan_location(db, "ScanLa"))
+            self.assertEqual(texas["propertyId"], 10)
+            self.assertEqual(texas["latitude"], 32.7767)
+            self.assertEqual(texas["longitude"], -96.797)
+            self.assertEqual(texas["timeZone"], "America/Chicago")
+            self.assertIsNone(texas["heading"])
+            self.assertNotIn("state", texas)
+            self.assertEqual(california["timeZone"], "America/Los_Angeles")
+            self.assertEqual(california["latitude"], 34.0522)
+            missing = scan_location(db, "not-a-model")
+            self.assertIsNone(missing)
+            ungeocoded = scan_location(db, "ScanDallas")
+            filled = with_site_coordinates(
+                {"propertyId": 30, "latitude": None, "longitude": None, "state": "TX",
+                 "heading": None, "timeZone": "America/Chicago", "source": "CoStar primary address"},
+                {"latitude": 31.7619, "longitude": -106.485, "approximate": True},
+            )
+            self.assertEqual(filled["timeZone"], "America/Denver")
+            self.assertEqual(filled["source"], "CoStar street address")
+            self.assertIsNone(ungeocoded["heading"])
+
+    def test_time_zone_follows_state_and_coordinates(self):
+        self.assertEqual(time_zone_for("TX", 32.78, -96.8), "America/Chicago")
+        self.assertEqual(time_zone_for("tx", 31.76, -106.49), "America/Denver")
+        self.assertEqual(time_zone_for("CA", 34.05, -118.24), "America/Los_Angeles")
+        self.assertEqual(time_zone_for("FL", 25.76, -80.19), "America/New_York")
+        self.assertEqual(time_zone_for("FL", 30.42, -87.22), "America/Chicago")
+        self.assertIsNone(time_zone_for("ZZ", 0, 0))
+        self.assertEqual(time_zone_for("NY"), "America/New_York")
 
 
     def test_shared_outline_snapshot_distinguishes_remote_ready_and_empty_scans(self):

@@ -69,6 +69,14 @@ def opening_candidates(room, outline_points, floor_height):
     return candidates[:32]
 
 
+def openings_on_outline(rooms, outline_points, floor_height):
+    """Keep Matterport openings whose wall matches this floor outline."""
+    found = []
+    for room in rooms or []:
+        found.extend(opening_candidates(room, outline_points, floor_height))
+    return found[:32]
+
+
 def outline(room, floor):
     vertices = {v["id"]: (v["position"]["x"], v["position"]["y"])
                 for v in floor["vertices"] if v.get("position")}

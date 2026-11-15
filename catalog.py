@@ -86,21 +86,25 @@ def starter_records(kit):
 
 
 def build(database, kit, password=None, *, starter_only=False):
-    with sqlite3.connect(database) as connection:
-        connection.execute("BEGIN")
-        connection.execute("DROP TABLE IF EXISTS locations")
-        connection.execute("""CREATE VIRTUAL TABLE locations USING fts5(
-            property_id UNINDEXED, name, street, city, state, category, notes,
-            captions, models UNINDEXED, tokenize='porter unicode61')""")
-        source = starter_records(kit) if starter_only else records(kit, password)
-        connection.executemany("INSERT INTO locations VALUES (?,?,?,?,?,?,?,?,?)", source)
-        connection.execute("CREATE TABLE IF NOT EXISTS catalog_source (mode TEXT NOT NULL)")
-        connection.execute("DELETE FROM catalog_source")
-        connection.execute("INSERT INTO catalog_source VALUES (?)", ("addresses" if starter_only else "full",))
-        count = connection.execute("SELECT count(*) FROM locations").fetchone()[0]
-        if not count:
-            raise ValueError("No CoStar records could be read. Make the commercial property file available offline.")
-        return count
+    connection = sqlite3.connect(database)
+    try:
+        with connection:
+            connection.execute("BEGIN")
+            connection.execute("DROP TABLE IF EXISTS locations")
+            connection.execute("""CREATE VIRTUAL TABLE locations USING fts5(
+                property_id UNINDEXED, name, street, city, state, category, notes,
+                captions, models UNINDEXED, tokenize='porter unicode61')""")
+            source = starter_records(kit) if starter_only else records(kit, password)
+            connection.executemany("INSERT INTO locations VALUES (?,?,?,?,?,?,?,?,?)", source)
+            connection.execute("CREATE TABLE IF NOT EXISTS catalog_source (mode TEXT NOT NULL)")
+            connection.execute("DELETE FROM catalog_source")
+            connection.execute("INSERT INTO catalog_source VALUES (?)", ("addresses" if starter_only else "full",))
+            count = connection.execute("SELECT count(*) FROM locations").fetchone()[0]
+            if not count:
+                raise ValueError("No CoStar records could be read. Make the commercial property file available offline.")
+            return count
+    finally:
+        connection.close()
 
 
 
@@ -121,11 +125,73 @@ def index_property_coordinates(database, kit, password=None):
         connection.execute("DELETE FROM property_coordinates")
         connection.executemany("INSERT INTO property_coordinates VALUES (?, ?, ?)",
                                ((key, *values) for key, values in sites.items()))
+    connection.close()
 
 
 def coordinates_indexed(database):
     with _connect_readonly(database) as connection:
-        return connection.execute("SELECT 1 FROM sqlite_master WHERE name = 'property_coordinates'").fetchone() is not None
+        listed = connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE name = 'property_coordinates'").fetchone()
+        if listed is None:
+            return False
+        return connection.execute("SELECT count(*) FROM property_coordinates").fetchone()[0] > 0
+
+
+# Majority civil time zone for a US state. States that span zones are refined
+# from the site coordinates; a missing point keeps the majority zone.
+STATE_TIME_ZONES = {
+    "AL": "America/Chicago", "AK": "America/Anchorage", "AZ": "America/Phoenix",
+    "AR": "America/Chicago", "CA": "America/Los_Angeles", "CO": "America/Denver",
+    "CT": "America/New_York", "DE": "America/New_York", "DC": "America/New_York",
+    "FL": "America/New_York", "GA": "America/New_York", "HI": "Pacific/Honolulu",
+    "IA": "America/Chicago", "ID": "America/Boise", "IL": "America/Chicago",
+    "IN": "America/Indiana/Indianapolis", "KS": "America/Chicago", "KY": "America/New_York",
+    "LA": "America/Chicago", "MA": "America/New_York", "MD": "America/New_York",
+    "ME": "America/New_York", "MI": "America/Detroit", "MN": "America/Chicago",
+    "MO": "America/Chicago", "MS": "America/Chicago", "MT": "America/Denver",
+    "NC": "America/New_York", "ND": "America/Chicago", "NE": "America/Chicago",
+    "NH": "America/New_York", "NJ": "America/New_York", "NM": "America/Denver",
+    "NV": "America/Los_Angeles", "NY": "America/New_York", "OH": "America/New_York",
+    "OK": "America/Chicago", "OR": "America/Los_Angeles", "PA": "America/New_York",
+    "RI": "America/New_York", "SC": "America/New_York", "SD": "America/Chicago",
+    "TN": "America/Chicago", "TX": "America/Chicago", "UT": "America/Denver",
+    "VA": "America/New_York", "VT": "America/New_York", "WA": "America/Los_Angeles",
+    "WI": "America/Chicago", "WV": "America/New_York", "WY": "America/Denver",
+}
+
+
+def time_zone_for(state, latitude=None, longitude=None):
+    """Return the IANA zone for a US address. City names are not consulted."""
+    code = (state or "").strip().upper()
+    zone = STATE_TIME_ZONES.get(code)
+    if zone is None or latitude is None or longitude is None:
+        return zone
+    # These four states have a sharp east/west split. Other split states keep
+    # the majority zone unless a coordinate falls on the side below.
+    if code == "TX" and longitude <= -104:
+        return "America/Denver"
+    if code == "FL" and longitude <= -85:
+        return "America/Chicago"
+    if code == "TN" and longitude >= -86.2:
+        return "America/New_York"
+    if code == "KY" and longitude <= -86.3:
+        return "America/Chicago"
+    return zone
+
+
+def with_site_coordinates(site, located=None):
+    """Fill a catalog site from an address geocode when the property file had no point."""
+    if not site:
+        return None
+    site = dict(site)
+    state = site.pop("state", None)
+    if located and (site.get("latitude") is None or site.get("longitude") is None):
+        site["latitude"] = located["latitude"]
+        site["longitude"] = located["longitude"]
+        site["timeZone"] = time_zone_for(state, located["latitude"], located["longitude"])
+        if located.get("approximate"):
+            site["source"] = "CoStar street address"
+    return site
 
 
 def scan_property(database, model):
@@ -142,7 +208,6 @@ def scan_property(database, model):
 
 def scan_location(database, model):
     """Return unambiguous site metadata for a catalog-linked Matterport model."""
-    zones = {("houston", "TX"): "America/Chicago", ("los angeles", "CA"): "America/Los_Angeles"}
     with _connect_readonly(database) as connection:
         # Older portable catalogs still supply the city and state.
         indexed = connection.execute(
@@ -156,18 +221,22 @@ def scan_location(database, model):
             (model,)).fetchall()
     if len(rows) != 1:
         return None
-    property_id, city, state, latitude, longitude = rows[0]
+    property_id, _city, state, latitude, longitude = rows[0]
     return {"propertyId": property_id, "latitude": latitude, "longitude": longitude,
-            "timeZone": zones.get(((city or "").strip().casefold(), (state or "").strip().upper())),
+            "state": state, "heading": None,
+            "timeZone": time_zone_for(state, latitude, longitude),
             "source": "CoStar primary address"}
 
 def source_mode(database):
-    with sqlite3.connect(database.resolve().as_uri() + "?mode=ro", uri=True) as connection:
+    connection = sqlite3.connect(database.resolve().as_uri() + "?mode=ro", uri=True)
+    try:
         if not connection.execute("SELECT EXISTS(SELECT 1 FROM locations)").fetchone()[0]:
             raise sqlite3.OperationalError("Empty catalog")
         if not connection.execute("SELECT 1 FROM sqlite_master WHERE name = 'catalog_source'").fetchone():
             return "full"
         return connection.execute("SELECT mode FROM catalog_source").fetchone()[0]
+    finally:
+        connection.close()
 
 
 PAGE_LIMIT = 100
@@ -178,8 +247,13 @@ CATEGORY_ALIASES = {
 }
 
 
+@contextmanager
 def _connect_readonly(database):
-    return sqlite3.connect(Path(database).resolve().as_uri() + "?mode=ro", uri=True)
+    connection = sqlite3.connect(Path(database).resolve().as_uri() + "?mode=ro", uri=True)
+    try:
+        yield connection
+    finally:
+        connection.close()
 
 
 def _search_rows(database, brief, limit, offset, *, city, category, linked_only,
