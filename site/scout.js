@@ -3,7 +3,7 @@ import {deleteProject, parseProjectArchive, projectArchiveMaxBytes, readProjects
 import {loadObstacles, outlineMeasurements, roomKey} from "./room-state.js";
 import {briefLocationFilters, briefSuggestions, reviewShotBrief, runAgent} from "./agent.js?v=first-shot";
 import {compareCapturedRooms} from "./compare.js";
-import {openMesh, closeMesh, currentShot, planCurrentShot, applyCurrentShot} from "./mesh.js?v=mesh-gap9";
+import {openMesh, closeMesh, currentShot, planCurrentShot, applyCurrentShot} from "./mesh.js?v=mesh-gap15";
 import {addMapLocations, resetLocationMap} from "./location-map.js?v=9";
 
 const form = document.querySelector("#scout-search");

@@ -1,4 +1,4 @@
-import {mountDaylight} from "./daylight.js?v=mesh-gap9";
+import {mountDaylight} from "./daylight.js?v=mesh-gap15";
 import {alignMesh, sightlineCheck} from "./sightlines.js?v=5";
 import {actorMarks, checkCameraHeight, loadShot, roomKey, shotSettings} from "./room-state.js";
 import {cameraMoveAxis, checkFraming, checkRigClearance, easedPathFraction, editorShotState, findSlide, interpretDirection, pathFromEndpoints, slideEndpoints, timeFractionAtPath, tracePath} from "./path.js?v=5";

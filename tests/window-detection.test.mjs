@@ -144,12 +144,112 @@ test("missing MatterPak mesh is a window and a solid pier keeps two openings apa
   assert.ok(partial.right - partial.x >= 8);
   const blown = new Uint8Array(size * size * 4).fill(255);
   for (let y = 0; y < 70; y++) blown.fill(0, (y * size + 20) * 4, (y * size + 50) * 4);
-  const clipped = meshGapPanes(blown, size, 8, 20, 40, 3, 0, size, 0, .03);
+  const unframed = meshGapPanes(blown, size, 8, 20, 40, 3, 0, size, 0, .03);
+  assert.equal(unframed.panes.length, 0, "a floor-to-header hole with no sill is not a window");
+  const framed = new Uint8Array(size * size * 4).fill(255);
+  for (let y = 25; y < 70; y++) framed.fill(0, (y * size + 20) * 4, (y * size + 50) * 4);
+  const clipped = meshGapPanes(framed, size, 8, 20, 40, 3, 0, size, 0, .03);
   assert.equal(clipped.panes.length, 1);
-  assert.ok(clipped.panes[0].y > 10, "the opening stays above the floor");
+  assert.ok(clipped.panes[0].y > 10, "a sill and a header keep the window band");
   clear(0, size, 0, 28);
   const doorway = meshGapPanes(mask, size, 8, 20, 80, 3);
   assert.equal(doorway.panes.length, 0);
+});
+
+test("photographed glass is darker than its sill, and a flat wall is not", async () => {
+  const {scannedGlazing} = await import("../site/window-detection.js");
+  const size = 96;
+  const mask = new Uint8Array(size * size * 4).fill(255);
+  const paint = (image, x0, x1, y0, y1, color) => {
+    for (let y = y0; y < y1; y++)
+      for (let x = x0; x < x1; x++) image.set([...color, 255], (y * size + x) * 4);
+  };
+  const wall = new Uint8Array(size * size * 4).fill(180);
+  const flat = scannedGlazing(wall, mask, size, 8, 12, 4, 92, 30, 70);
+  assert.equal(flat.panes.length, 0);
+  const glass = new Uint8Array(wall);
+  paint(glass, 20, 52, 30, 70, [30, 36, 48]);
+  const pane = scannedGlazing(glass, mask, size, 8, 12, 4, 92, 30, 70);
+  assert.equal(pane.panes.length, 1);
+  assert.ok(Math.abs(pane.panes[0].x - 20) <= 1);
+  const throughFloor = new Uint8Array(glass);
+  paint(throughFloor, 20, 52, 12, 30, [30, 36, 48]);
+  const doorway = scannedGlazing(throughFloor, mask, size, 8, 12, 4, 92, 30, 70);
+  assert.equal(doorway.panes.length, 0);
+  const blinds = new Uint8Array(wall);
+  for (let y = 30; y < 70; y++)
+    paint(blinds, 24, 60, y, y + 1, y % 2 ? [28, 28, 28] : [150, 150, 150]);
+  const slatted = scannedGlazing(blinds, mask, size, 8, 12, 4, 92, 30, 70);
+  assert.equal(slatted.panes.length, 1);
+  const sunlit = new Uint8Array(wall);
+  paint(sunlit, 20, 52, 30, 70, [235, 232, 220]);
+  const bright = scannedGlazing(sunlit, mask, size, 8, 12, 4, 92, 30, 70);
+  assert.equal(bright.panes.length, 1);
+  const washed = new Uint8Array(wall);
+  paint(washed, 4, 92, 30, 70, [235, 232, 220]);
+  const wholeWall = scannedGlazing(washed, mask, size, 8, 12, 4, 92, 30, 70);
+  assert.equal(wholeWall.panes.length, 0);
+  const bank = new Uint8Array(wall);
+  paint(bank, 16, 40, 30, 70, [235, 232, 220]);
+  paint(bank, 40, 43, 30, 70, [30, 30, 30]);
+  paint(bank, 43, 70, 30, 70, [230, 228, 216]);
+  const splitBank = scannedGlazing(bank, mask, size, 8, 12, 4, 92, 30, 70);
+  assert.equal(splitBank.panes.length, 2);
+  const ceiling = new Uint8Array(size * size * 4).fill(210);
+  paint(ceiling, 30, 33, 0, size, [20, 20, 20]);
+  paint(ceiling, 55, 58, 0, size, [20, 20, 20]);
+  const fullHeight = scannedGlazing(ceiling, mask, size, 8, 12, 4, 92, 30, 70);
+  assert.ok(fullHeight.panes.length >= 2, "bright panes between mullions need no darker sill");
+  const graded = new Uint8Array(wall);
+  for (let x = 12; x < 80; x++) {
+    const tone = 150 + Math.round((x - 12) / 68 * 80);
+    paint(graded, x, x + 1, 30, 70, [tone, tone, tone]);
+  }
+  const wash = scannedGlazing(graded, mask, size, 8, 12, 4, 92, 30, 70);
+  assert.ok(wash.panes.every(pane => pane.right - pane.x < 24), "light that fades across a wall is not a wide pane");
+  const matched = new Uint8Array(size * size * 4).fill(120);
+  for (let y = 30; y < 70; y++)
+    paint(matched, 24, 58, y, y + 1, y % 2 ? [40, 40, 40] : [200, 200, 200]);
+  paint(matched, 21, 24, 30, 70, [30, 30, 30]);
+  paint(matched, 58, 61, 30, 70, [30, 30, 30]);
+  const evenBlinds = scannedGlazing(matched, mask, size, 8, 12, 4, 92, 30, 70);
+  assert.equal(evenBlinds.panes.length, 1, "slats inside a frame stay a window when they match the wall");
+  const continued = new Uint8Array(wall);
+  paint(continued, 20, 52, 30, size, [230, 228, 220]);
+  const litWall = scannedGlazing(continued, mask, size, 8, 12, 4, 92, 30, 70);
+  assert.equal(litWall.panes.length, 0, "a bright patch that continues above the band is the wall");
+});
+
+test("mullioned voids are panes and one missing wall is not", async () => {
+  const {framedVoidPanes} = await import("../site/window-detection.js");
+  const size = 96;
+  const mask = new Uint8Array(size * size * 4).fill(255);
+  const clear = (x0, x1) => {
+    for (let y = 20; y < 70; y++) mask.fill(0, (y * size + x0) * 4, (y * size + x1) * 4);
+  };
+  clear(16, 36);
+  clear(42, 68);
+  const split = framedVoidPanes(mask, size, 8, 4, 92, 20, 70);
+  assert.equal(split.length, 2);
+  const gone = new Uint8Array(size * size * 4);
+  assert.equal(framedVoidPanes(gone, size, 8, 4, 92, 20, 70).length, 0);
+});
+
+test("a mesh hole is a window when it is a void or daylight, and a doorway when it shows a room", async () => {
+  const {openingLooksLikeWindow} = await import("../site/window-detection.js");
+  const size = 96;
+  const mask = new Uint8Array(size * size * 4).fill(255);
+  const pixels = new Uint8Array(size * size * 4).fill(150);
+  const pane = {x: 30, right: 52, y: 28, top: 68};
+  for (let y = pane.y; y < pane.top; y++) mask.fill(0, (y * size + pane.x) * 4, (y * size + pane.right) * 4);
+  for (let y = pane.y; y < pane.top; y++) pixels.fill(8, (y * size + pane.x) * 4, (y * size + pane.right) * 4);
+  assert.equal(openingLooksLikeWindow(pixels, mask, size, pane), true);
+  pixels.fill(210, 0);
+  for (let y = 0; y < size; y++) pixels.fill(140, (y * size) * 4, (y * size + pane.x) * 4);
+  for (let y = 0; y < size; y++) pixels.fill(140, (y * size + pane.right) * 4, (y * size + size) * 4);
+  assert.equal(openingLooksLikeWindow(pixels, mask, size, pane), true);
+  pixels.fill(150, 0);
+  assert.equal(openingLooksLikeWindow(pixels, mask, size, pane), false);
 });
 
 test("wall-registered views combine duplicate suggestions and preserve adjacent panes", async () => {

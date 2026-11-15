@@ -311,6 +311,44 @@ export function splitWindowRow(pixels, mask, size, span, minWidth, maxDivider = 
   return {panes, rejected};
 }
 
+// An opening the mesh left empty, bounded by solid jambs on both sides.
+// One hole the width of the wall is a missing wall. Two or more, split by a
+// mullion, are a window wall even when the sill was never scanned.
+export function framedVoidPanes(mask, size, minWidth, x0, x1, y0, y1) {
+  const solidAt = (x, y) => x >= 0 && y >= 0 && x < size && y < size && mask[(y * size + x) * 4] > 127;
+  if (y1 - y0 < 6 || x1 - x0 < minWidth) return [];
+  const columns = [];
+  const band = y1 - y0;
+  for (let x = x0; x < x1; x++) {
+    let empty = 0, streak = 0, longest = 0;
+    for (let y = y0; y < y1; y++) {
+      if (solidAt(x, y)) { streak++; longest = Math.max(longest, streak); }
+      else { streak = 0; empty++; }
+    }
+    // A thin mullion is a vertical solid streak. Scattered holes are not a bar.
+    columns.push({x, open: empty / band >= .55 && longest < band * .35});
+  }
+  const runs = [];
+  let run = [];
+  const flush = () => { if (run.length) runs.push(run); run = []; };
+  for (const column of columns) {
+    if (column.open) run.push(column);
+    else if (run.length) flush();
+  }
+  flush();
+  const panes = [];
+  for (const group of runs) {
+    if (group.length < minWidth || group.length > minWidth * 6) continue;
+    const left = group[0].x - x0 - 1;
+    const right = group.at(-1).x - x0 + 1;
+    if (left < 0 || right >= columns.length || columns[left].open || columns[right].open) continue;
+    panes.push({x: group[0].x, right: group.at(-1).x + 1, y: y0, top: y1, kind: "Mesh opening",
+      score: group.length * (y1 - y0), confidence: .8,
+      source: "Unscanned MatterPak opening"});
+  }
+  return panes;
+}
+
 // A pane is a stretch of wall the MatterPak never reconstructed: empty in the
 // occupancy mask, with scanned mesh underneath it for a sill. A solid column
 // wider than a mullion separates panes. Photo color is not used here.
@@ -350,14 +388,24 @@ export function meshGapPanes(mask, size, minWidth, minHeight, maxHeight, minDivi
         let chosen = null;
         if (height >= minHeight && height <= maxHeight && (firmSill || raisedOpening))
           chosen = {y: start, top};
-        else if (metersY && yOrigin != null && height > maxHeight && top < size - 3 &&
-            solidAt(x, Math.min(size - 1, top + 2))) {
-          // The hole continues through the apron, but it still ends under a header.
-          const bandBottom = Math.max(0, Math.round((.7 - yOrigin) / metersY));
-          const bandTop = Math.min(top, Math.round((2.35 - yOrigin) / metersY));
-          let openRows = 0, rows = 0;
+        else if (metersY && yOrigin != null && height > maxHeight && top < size - 4) {
+          // Keep the window band only when a real sill and a real header survive.
+          // One solid pixel above an empty wall is not a header.
+          const bandBottom = Math.max(0, Math.round((.75 - yOrigin) / metersY));
+          const bandTop = Math.min(top, Math.round((2.2 - yOrigin) / metersY));
+          let openRows = 0, rows = 0, sill = 0, sillN = 0, header = 0, headerN = 0;
           for (let row = bandBottom; row < bandTop; row++) { rows++; openRows += open[row]; }
-          if (rows >= minHeight && bandTop - bandBottom >= minHeight && openRows / rows >= .45)
+          for (let row = bandBottom - 6; row < bandBottom; row++) {
+            if (row < 0) continue;
+            sillN++;
+            sill += solidAt(x, row) ? 1 : 0;
+          }
+          for (let row = bandTop; row < Math.min(size, bandTop + 5); row++) {
+            headerN++;
+            header += solidAt(x, row) ? 1 : 0;
+          }
+          if (rows >= minHeight && bandTop - bandBottom >= minHeight && openRows / rows >= .5 &&
+              sillN >= 4 && sill / sillN >= .6 && headerN >= 3 && header / headerN >= .6)
             chosen = {y: bandBottom, top: bandTop};
         }
         if (chosen && (!best || chosen.top - chosen.y > best.top - best.y)) best = chosen;
@@ -434,6 +482,248 @@ export function meshGapPanes(mask, size, minWidth, minHeight, maxHeight, minDivi
   panes.push(...extras);
   panes.sort((a, b) => b.score - a.score);
   return {panes, rejected: []};
+}
+
+function evenLuminance(values) {
+  if (!values.length) return false;
+  const third = Math.max(1, Math.floor(values.length / 3));
+  const mean = group => group.reduce((sum, value) => sum + value, 0) / group.length;
+  return Math.max(...values) - Math.min(...values) <= 48 &&
+    Math.abs(mean(values.slice(0, third)) - mean(values.slice(-third))) <= 14;
+}
+
+// Photographed glass still has mesh, so occupancy will not see it. A pane here
+// is darker or more broken up than the solid wall under it, and it stops at a
+// jamb. A flat wall, and a hole that reaches the floor, stay out.
+export function scannedGlazing(pixels, mask, size, minWidth, minHeight, x0, x1, bandY, bandTop) {
+  const solidAt = (x, y) => x >= 0 && y >= 0 && x < size && y < size && mask[(y * size + x) * 4] > 127;
+  const lumAt = (x, y) => {
+    const i = (y * size + x) * 4;
+    return .30 * pixels[i] + .59 * pixels[i + 1] + .11 * pixels[i + 2];
+  };
+  const y0 = Math.max(0, bandY | 0);
+  const y1 = Math.min(size, bandTop | 0);
+  const sill0 = Math.max(0, y0 - Math.max(4, Math.round((y1 - y0) * .4)));
+  if (y1 - y0 < minHeight || x1 - x0 < minWidth) return {panes: []};
+  const columns = [];
+  for (let x = x0; x < x1; x++) {
+    const band = [];
+    let solidBand = 0, sillSolid = 0, sillN = 0;
+    for (let y = y0; y < y1; y++) if (solidAt(x, y)) { solidBand++; band.push(lumAt(x, y)); }
+    const sill = [];
+    for (let y = sill0; y < y0; y++) {
+      sillN++;
+      if (solidAt(x, y)) { sillSolid++; sill.push(lumAt(x, y)); }
+    }
+    const filled = solidBand / Math.max(1, y1 - y0);
+    const sillThere = sillN >= 4 && sillSolid / sillN >= .55 && sill.length >= 3;
+    if (filled < .6 || !sillThere || band.length < minHeight * .5) {
+      columns.push({x, glass: false});
+      continue;
+    }
+    const bandLum = median(band);
+    const sillLum = median(sill);
+    let flips = 0, compared = 0, previous = null;
+    for (let y = y0; y < y1; y++) {
+      if (!solidAt(x, y)) { previous = null; continue; }
+      const value = lumAt(x, y);
+      if (previous != null) {
+        compared++;
+        if (Math.abs(value - previous) >= 36) flips++;
+      }
+      previous = value;
+    }
+    const slats = compared >= 6 && flips / compared >= .35;
+    let deviation = 0;
+    for (const value of band) deviation += (value - bandLum) ** 2;
+    deviation = Math.sqrt(deviation / band.length);
+    const brighter = bandLum - sillLum >= 28;
+    const darker = sillLum - bandLum >= 24;
+    // Repeating slats stay a window when their average matches the wall below.
+    const blinds = (deviation >= 20 && Math.abs(sillLum - bandLum) >= 14) ||
+      (slats && (Math.abs(sillLum - bandLum) >= 14 || flips / compared >= .45));
+    let edgeSum = 0, edgeN = 0;
+    if (x > x0) {
+      for (let y = y0; y < y1; y++) {
+        if (!solidAt(x, y) || !solidAt(x - 1, y)) continue;
+        edgeSum += Math.abs(lumAt(x, y) - lumAt(x - 1, y));
+        edgeN++;
+      }
+    }
+    columns.push({x, glass: brighter || darker || blinds, blinds, bandLum, sillLum,
+      edge: edgeN ? edgeSum / edgeN : 0});
+  }
+  for (let index = 0; index < columns.length; index++) {
+    const column = columns[index];
+    if (column.bandLum == null) continue;
+    const side = direction => {
+      let brightest = null;
+      for (let step = 1; step <= 3; step++) {
+        const lum = columns[index + direction * step]?.bandLum;
+        if (lum == null) continue;
+        brightest = brightest == null ? lum : Math.max(brightest, lum);
+      }
+      return brightest;
+    };
+    const left = side(-1);
+    const right = side(1);
+    if (left != null && right != null && left - column.bandLum >= 22 && right - column.bandLum >= 22) {
+      column.glass = false;
+      column.mullion = true;
+    }
+  }
+  const panes = [];
+  let run = [];
+  let gap = 0;
+  const splitAt = Math.max(2, Math.round(minWidth * .15));
+  const flush = () => {
+    if (run.length >= minWidth) {
+      const busy = run.filter(column => column.blinds).length / run.length;
+      const contrast = run.reduce((sum, column) => sum + Math.abs(column.sillLum - column.bandLum), 0) / run.length;
+      const lums = run.map(column => column.bandLum);
+      const runLum = median(lums);
+      const flat = evenLuminance(lums);
+      const at = x => columns[x - x0];
+      const neighbors = [at(run[0].x - 1), at(run.at(-1).x + 1)].filter(column => column?.bandLum != null);
+      const edged = neighbors.some(column => Math.abs(runLum - column.bandLum) >= 18);
+      const spansWall = run.at(-1).x - run[0].x + 1 >= (x1 - x0) * .8;
+      const frame = edged || run.some(column => column.edge >= 22) ||
+        neighbors.some(column => column.edge >= 22);
+      const header = [];
+      for (const column of run) {
+        for (let y = y1; y < Math.min(size, y1 + 8); y++) {
+          if (solidAt(column.x, y)) header.push(lumAt(column.x, y));
+        }
+      }
+      const headerLum = header.length >= 4 ? median(header) : null;
+      // A long fade across a wall can look brighter than the sill. A compact
+      // framed pane is allowed to vary, the way blinds do. A bright patch
+      // whose wall continues above it is the same lit surface.
+      const sameSurface = headerLum != null && runLum >= 150 && headerLum >= 145 &&
+        Math.abs(headerLum - runLum) <= 28;
+      const kept = !sameSurface && !spansWall && frame && (contrast >= 16 || busy >= .4) &&
+        (edged || contrast >= 24 || busy >= .4) &&
+        (run.length <= minWidth * 4 || flat);
+      if (kept) {
+        panes.push({x: run[0].x, right: run.at(-1).x + 1, y: y0, top: y1, kind: "Scanned glazing",
+          score: (run.at(-1).x + 1 - run[0].x) * (y1 - y0) * .45, confidence: .78,
+          source: "Scanned glazing"});
+      }
+    }
+    run = [];
+    gap = 0;
+  };
+  for (const column of columns) {
+    if (!column.glass) {
+      if (column.mullion && run.length) flush();
+      if (run.length) gap++;
+      if (gap >= splitAt) flush();
+      continue;
+    }
+    if (gap >= splitAt) flush();
+    gap = 0;
+    run.push(column);
+  }
+  flush();
+  // Floor-to-ceiling glass has no darker sill. A bank of bright panes between
+  // mullions is still a window; one dark stripe on a bright wall is not.
+  const framed = [];
+  let between = [];
+  const take = () => {
+    const usable = between.filter(column => column.bandLum != null);
+    if (usable.length >= minWidth && usable.length <= (x1 - x0) * .62) {
+      const values = usable.map(column => column.bandLum);
+      const lum = median(values);
+      if (lum >= 145 && evenLuminance(values)) framed.push(usable);
+    }
+    between = [];
+  };
+  for (const column of columns) {
+    if (column.mullion) take();
+    else between.push(column);
+  }
+  take();
+  if (framed.length >= 2) {
+    for (const usable of framed) {
+      const box = {x: usable[0].x, right: usable.at(-1).x + 1, y: y0, top: y1};
+      const bounds = [columns[usable[0].x - x0 - 1], columns[usable.at(-1).x - x0 + 1]];
+      if (!bounds.some(column => column?.mullion && (column.edge || 0) >= 16)) continue;
+      if (panes.some(pane => overlapFraction(pane, box) >= .5)) continue;
+      panes.push({...box, kind: "Scanned glazing",
+        score: (box.right - box.x) * (y1 - y0) * .4, confidence: .74,
+        source: "Scanned glazing"});
+    }
+  }
+  return {panes};
+}
+
+// Daylight through a hole, as opposed to a black tear or an unscanned doorway.
+export function daylightHole(pixels, mask, size, pane) {
+  const lumAt = (x, y) => {
+    const i = (y * size + x) * 4;
+    return .30 * pixels[i] + .59 * pixels[i + 1] + .11 * pixels[i + 2];
+  };
+  let lum = 0, count = 0, wall = 0, wallCount = 0;
+  const stepX = Math.max(1, Math.round((pane.right - pane.x) / 12));
+  const stepY = Math.max(1, Math.round((pane.top - pane.y) / 12));
+  for (let x = pane.x; x < pane.right; x += stepX) {
+    for (let y = pane.y; y < pane.top; y += stepY) {
+      if (x < 0 || y < 0 || x >= size || y >= size) continue;
+      count++;
+      lum += lumAt(x, y);
+    }
+  }
+  const sampleWall = x => {
+    for (let y = pane.y; y < pane.top; y += stepY) {
+      if (x < 0 || y < 0 || x >= size || y >= size) continue;
+      if (mask[(y * size + x) * 4] < 128) continue;
+      wallCount++;
+      wall += lumAt(x, y);
+    }
+  };
+  sampleWall(pane.x - 3);
+  sampleWall(pane.right + 2);
+  if (count < 4 || wallCount < 3) return false;
+  return lum / count - wall / wallCount >= 32;
+}
+
+// A hole is a window when the photo inside it is a void or daylight. A hole
+// that shows another scanned room is a doorway.
+export function openingLooksLikeWindow(pixels, mask, size, pane) {
+  const lumAt = (x, y) => {
+    const i = (y * size + x) * 4;
+    return .30 * pixels[i] + .59 * pixels[i + 1] + .11 * pixels[i + 2];
+  };
+  let lum = 0, count = 0, empty = 0;
+  const stepX = Math.max(1, Math.round((pane.right - pane.x) / 12));
+  const stepY = Math.max(1, Math.round((pane.top - pane.y) / 12));
+  for (let x = pane.x; x < pane.right; x += stepX) {
+    for (let y = pane.y; y < pane.top; y += stepY) {
+      if (x < 0 || y < 0 || x >= size || y >= size) continue;
+      count++;
+      if (mask[(y * size + x) * 4] < 128) empty++;
+      lum += lumAt(x, y);
+    }
+  }
+  if (count < 4) return false;
+  const inside = lum / count;
+  if (empty / count >= .75 && inside < 22) return true;
+  let wall = 0, wallCount = 0;
+  const sampleWall = x => {
+    for (let y = pane.y; y < pane.top; y += stepY) {
+      if (x < 0 || y < 0 || x >= size || y >= size) continue;
+      if (mask[(y * size + x) * 4] < 128) continue;
+      wallCount++;
+      wall += lumAt(x, y);
+    }
+  };
+  sampleWall(pane.x - 3);
+  sampleWall(pane.right + 2);
+  if (wallCount < 3) return false;
+  const wallLum = wall / wallCount;
+  // Daylight is brighter than the wall. A raised opening onto a darker
+  // exterior is darker, and still a window.
+  return inside - wallLum >= 32 || (empty / count >= .75 && wallLum - inside >= 30);
 }
 
 function overlapFraction(a, b) {
@@ -518,6 +808,10 @@ export function scanWindowCandidates(THREE, room, mesh, renderer, photoMaterial 
   const size = 160;
   const target = new THREE.WebGLRenderTarget(size, size);
   const previous = renderer.getRenderTarget();
+  const savedTone = renderer.toneMapping;
+  const savedSpace = renderer.outputColorSpace;
+  renderer.toneMapping = THREE.NoToneMapping;
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
   const mask = new Uint8Array(size*size*4);
   const pixels = new Uint8Array(size*size*4);
   const outline = room.outline;
@@ -571,6 +865,7 @@ export function scanWindowCandidates(THREE, room, mesh, renderer, photoMaterial 
       const wallCandidates = [];
       const wallRejected = [];
       let foundGaps = false;
+      let foundGlazing = false;
       renderer.setRenderTarget(target);
       for (const angle of [0, -27, 27]) {
         // Shear the rays while keeping pixels on the wall plane registered.
@@ -617,17 +912,78 @@ export function scanWindowCandidates(THREE, room, mesh, renderer, photoMaterial 
             Math.max(8, Math.round(2.7 / metersY)),
             Math.max(2, Math.round(.08 / metersX)),
             wallX0, wallX1, y0, metersY);
+          const emptyShare = (lowMeter, highMeter) => {
+            const yA = Math.max(0, Math.round((lowMeter - y0) / frameHeight * size));
+            const yB = Math.min(size, Math.round((highMeter - y0) / frameHeight * size));
+            let empty = 0, count = 0;
+            for (let x = wallX0; x < wallX1; x += 2) {
+              for (let y = yA; y < yB; y += 2) {
+                count++;
+                if (mask[(y * size + x) * 4] < 128) empty++;
+              }
+            }
+            return count ? empty / count : 0;
+          };
+          const shape = {below: emptyShare(0, .6), band: emptyShare(.8, 2.1), above: emptyShare(2.3, elevation)};
           if (gaps.panes.length) {
-            foundGaps = true;
             for (const pane of gaps.panes) {
-              const across = ((pane.right - pane.x) * metersX).toFixed(1);
-              const tall = ((pane.top - pane.y) * metersY).toFixed(1);
+              const wide = (pane.right - pane.x) * metersX;
+              const high = (pane.top - pane.y) * metersY;
+              // A missing wall is wide and unframed. A short hole is a gap, not a pane.
+              const sill = y0 + pane.y * metersY;
+              if (wide > 8 || wide < .45 || high < .7) continue;
+              // A short opening at the floor is a gap. One in the top of the
+              // room is the ceiling edge, not a pane. One that reaches the
+              // floor is a door. A tall black slit is a tear, not a window.
+              if (high < 1 && (wide > 1.6 || sill < .9)) continue;
+              if (sill < .35 || sill > elevation - .55) continue;
+              if (sill + high > elevation + .15 && sill > elevation - 1) continue;
+              if (high > 1.8 && high > wide * 2.2 && sill < .6 && !daylightHole(pixels, mask, size, pane)) continue;
+              if (!openingLooksLikeWindow(pixels, mask, size, pane)) continue;
+              foundGaps = true;
+              const across = wide.toFixed(1);
+              const tall = high.toFixed(1);
               wallCandidates.push({...pane, view: angle,
                 source: "Unscanned MatterPak opening, " + across + " m × " + tall + " m"});
             }
           }
+          const rowOf = meters => Math.round((meters - y0) / frameHeight * size);
+          const bandLow = rowOf(.75);
+          const bandHigh = rowOf(2.2);
+          if (shape.band >= .45) {
+            const voids = framedVoidPanes(mask, size,
+              Math.max(4, Math.round(.55 / metersX)), wallX0, wallX1, bandLow, bandHigh);
+            const shell = shape.below >= .68 && shape.above >= .68 && shape.band >= .68;
+            if (!(shell && voids.length < 2)) {
+              for (const pane of voids) {
+                if (gaps.panes.some(hole => overlapFraction(hole, pane) >= .4)) continue;
+                const wide = (pane.right - pane.x) * metersX;
+                if (wide < .45 || wide > 3.2) continue;
+                if (!openingLooksLikeWindow(pixels, mask, size, pane)) continue;
+                foundGaps = true;
+                wallCandidates.push({...pane, view: angle,
+                  source: "Unscanned MatterPak opening, " + wide.toFixed(1) + " m × " +
+                    ((pane.top - pane.y) * metersY).toFixed(1) + " m"});
+              }
+            }
+          }
+          const glazedMinW = Math.max(4, Math.round(.55 / metersX));
+          const glazedMinH = Math.max(6, Math.round(.7 / metersY));
+          for (const [low, high] of [[.75, 2.2]]) {
+            const glazed = scannedGlazing(pixels, mask, size, glazedMinW, glazedMinH,
+              wallX0, wallX1, rowOf(low), rowOf(high));
+            for (const pane of glazed.panes) {
+              if (gaps.panes.some(hole => overlapFraction(hole, pane) >= .4)) continue;
+              if (wallCandidates.some(other => overlapFraction(other, pane) >= .45)) continue;
+              foundGlazing = true;
+              const across = ((pane.right - pane.x) * metersX).toFixed(1);
+              const tall = ((pane.top - pane.y) * metersY).toFixed(1);
+              wallCandidates.push({...pane, view: angle,
+                source: "Scanned glazing, " + across + " m × " + tall + " m"});
+            }
+          }
         }
-        if (foundGaps) continue;
+        if (foundGaps || foundGlazing) continue;
         if (bands.length) {
           const px = along => ((along - width / 2) / frameWidth + .5) * size;
           const py = y => (y - y0) / frameHeight * size;
@@ -650,14 +1006,10 @@ export function scanWindowCandidates(THREE, room, mesh, renderer, photoMaterial 
                   source: "Matterport opening, " + pane.kind + " between mullions"});
             }
           }
-        } else {
-          const view = panesInWallView(pixels, mask, size, frameWidth, frameHeight);
-          for (const box of view.accepted) wallCandidates.push({...box, view: angle});
-          for (const box of view.rejected) wallRejected.push({...box, view: angle});
         }
       }
-      if (foundGaps) {
-        // The empty scan regions are the windows. Color splits stay unused.
+      if (foundGaps || foundGlazing) {
+        // Empty scan regions and photographed glass are already panes.
       } else if (bands.length && !bands.some(band => band.split)) {
         for (const band of bands) {
           candidates.push({
@@ -708,6 +1060,8 @@ export function scanWindowCandidates(THREE, room, mesh, renderer, photoMaterial 
     result.rejected = rejected.slice(0, 8);
     return result;
   } finally {
+    renderer.toneMapping = savedTone;
+    renderer.outputColorSpace = savedSpace;
     renderer.setRenderTarget(previous);
     target.dispose();
     surface.dispose();

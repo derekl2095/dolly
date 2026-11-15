@@ -1,5 +1,5 @@
 import {createRelight} from "./relight.js?v=dark-panes";
-import {scanWindowCandidates} from "./window-detection.js?v=mesh-gap9";
+import {scanWindowCandidates} from "./window-detection.js?v=mesh-gap15";
 async function request(path, options) {
   const response = await fetch(path, options);
   const data = await response.json();
