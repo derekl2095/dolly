@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Dolly</title>
-<link rel="icon" href="dolly.svg?v=viewfinder" type="image/svg+xml">
+<link rel="icon" href="dolly.svg?v=lens-sheep" type="image/svg+xml">
 <style>
 :root {color-scheme:dark;font:16px system-ui;background:#181b1c;color:#f1efe8}
 body {margin:0} main {max-width:1100px;margin:auto;padding:clamp(20px,5vw,60px)}
@@ -55,11 +55,11 @@ select {max-width:100%} canvas {width:100%;display:block;margin-top:12px;backgro
 #transport input[type="range"] {width:90px;padding:0}
 @media(max-width:700px){.layout{grid-template-columns:1fr}}
 </style>
-<link rel="stylesheet" href="scout-studio.css?v=daylight-panel">
+<link rel="stylesheet" href="scout-studio.css?v=daylight-loops">
 </head>
 <body><main>
 <header class="studio-header">
-<a class="studio-brand" href="./"><img src="dolly.svg?v=viewfinder" alt="" width="36" height="36">Dolly</a>
+<a class="studio-brand" href="./"><img src="dolly.svg?v=lens-sheep" alt="" width="36" height="36">Dolly</a>
 <nav aria-label="Workspace">
 <button id="back-to-results" type="button"><span class="to-results">← Results</span><span class="to-shot">Return to shot</span></button>
 </nav>
@@ -264,29 +264,29 @@ select {max-width:100%} canvas {width:100%;display:block;margin-top:12px;backgro
 </div>
 <div class="furniture-tools" hidden>
 <div class="plan-edit-actions">
+<button id="add-actor" type="button" disabled>Add actor</button>
+<button id="mark-obstacle" type="button" aria-pressed="false">Add furniture</button>
 <button id="draw-curve" type="button" aria-pressed="false" disabled>Draw path</button>
 <button id="center-aim" type="button" disabled>Aim at actors</button>
 </div>
-<section class="plan-object-controls" aria-label="Actors">
-<h3>Actors</h3>
+<details class="plan-object-controls">
+<summary>Actors</summary>
 <div id="actor-sizing" hidden>
 <label>Actor <select id="actor-selection"></select></label>
 <label>Standing height (m) <input type="number" id="actor-height" min=".5" max="3" step="any"></label>
 <button id="place-actor" type="button">Move actor</button>
 <button id="remove-actor" type="button">Remove actor</button>
 </div>
-<button id="add-actor" type="button" disabled>Add actor</button>
-</section>
-<section class="plan-object-controls" aria-label="Furniture">
-<h3>Furniture</h3>
+</details>
+<details class="plan-object-controls">
+<summary>Furniture</summary>
 <p>Drag a marked box on the plan to move it. The 3D preview follows.</p>
 <div id="furniture-sizing" hidden>
 <label>Furniture <select id="furniture-selection"></select></label>
 <label>Height (m) <input type="number" id="furniture-height" min="0" max="12" step="any"></label>
 <button id="delete-furniture" type="button">Delete selected</button>
 </div>
-<button id="mark-obstacle" type="button" aria-pressed="false">Add furniture</button>
-</section>
+</details>
 </div>
 <p id="plan-instructions" role="status" hidden>Drag empty space to orbit. Drag a handle to move it.</p>
 </div></div>
@@ -385,4 +385,4 @@ select {max-width:100%} canvas {width:100%;display:block;margin-top:12px;backgro
 </div>
 </main>
 <script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js","three-mesh-bvh":"https://cdn.jsdelivr.net/npm/three-mesh-bvh@0.8.3/build/index.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"}}</script>
-<script type="module" src="scout.js?v=daylight-panel"></script></body></html>
+<script type="module" src="scout.js?v=daylight-loops"></script></body></html>

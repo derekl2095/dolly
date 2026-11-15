@@ -1,4 +1,4 @@
-import {tracePath} from "./path.js?v=spatial-plan";
+import {maxDrawnTravel, tracePath} from "./path.js?v=drawn-loops";
 import {maxActors} from "./room-state.js?v=spatial-plan";
 
 const storageKey = "scout-projects-v1";
@@ -54,7 +54,7 @@ export function parseProjectArchive(text) {
       (shot.axis == null || point(shot.axis)) &&
       (shot.moveKind === "curve" ? Boolean(tracePath(shot.pathPoints)) : shot.pathPoints == null) &&
       Number.isFinite(shot.lens) && shot.lens >= 15 && shot.lens <= 150 &&
-      Number.isFinite(shot.travel) && shot.travel >= 0 && shot.travel <= 4 &&
+      Number.isFinite(shot.travel) && shot.travel >= 0 && shot.travel <= (shot.moveKind === "curve" ? maxDrawnTravel + 1e-8 : 4) &&
       Array.isArray(shot.actors) && shot.actors.length >= 2 && shot.actors.length <= maxActors &&
       shot.actors.every(actor => actor == null || point(actor)) &&
       (shot.actorHeights == null || (Array.isArray(shot.actorHeights) && shot.actorHeights.length <= maxActors &&
