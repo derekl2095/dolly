@@ -1,6 +1,6 @@
 import {actorHeight, defaultActorHeight, standIn} from "./room-state.js";
 import {createRelight} from "./relight.js?v=dark-panes";
-import {scanWindowCandidates} from "./window-detection.js?v=mesh-gap9";
+import {scanWindowCandidates} from "./window-detection.js?v=mesh-gap16";
 async function request(path, options) {
   const response = await fetch(path, options);
   const data = await response.json();

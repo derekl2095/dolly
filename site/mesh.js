@@ -1,4 +1,4 @@
-import {mountDaylight} from "./daylight.js?v=staging-controls";
+import {mountDaylight} from "./daylight.js?v=staging-windows";
 import {alignMesh, furnitureSightlineCheck, sightlineCheck} from "./sightlines.js?v=furniture-sightlines";
 import {actorCenter, actorHeight, defaultActorHeight, actorMarks, checkCameraHeight, furnitureHeight, loadShot, maxActors, roomKey, shotSettings, standIn} from "./room-state.js?v=staging-controls";
 import {cameraMoveAxis, checkFraming, checkRigClearance, easedPathFraction, editorShotState, findSlide, interpretDirection, pathFromEndpoints, slideEndpoints, timeFractionAtPath, tracePath} from "./path.js?v=staging-controls";
