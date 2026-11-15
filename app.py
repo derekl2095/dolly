@@ -27,8 +27,8 @@ from catalog import (
     build, coordinates_indexed, index_property_coordinates, scan_location, scan_property, search_page,
     source_mode, with_site_coordinates,
 )
-from fetch_matterpak import MAX_ARCHIVE_BYTES, MatterPakUnavailable, download_mesh, mesh_assets, stored_locally, unpack
-from import_room import DEFAULT_ASSETS, OPENINGS_QUERY, openings_on_outline, import_measured_room, import_rooms, read_model, valid_id
+from fetch_matterpak import MAX_ARCHIVE_BYTES, MatterPakSizeError, MatterPakUnavailable, download_mesh, mesh_assets, stored_locally, unpack
+from import_room import DEFAULT_ASSETS, HEADING_QUERY, OPENINGS_QUERY, model_heading, openings_on_outline, import_measured_room, import_rooms, read_model, valid_id
 from location_map import locate_property
 from model_provider import configured, next_turn
 
@@ -110,6 +110,7 @@ class ScoutServer(ThreadingHTTPServer):
         self.outline_index = outline_index or {}
         self.mesh_import_lock = Lock()
         self.mesh_imports = WeakValueDictionary()
+        self.model_headings = {}
         super().__init__(address, Handler)
 
     def mesh_root(self, model):
@@ -226,6 +227,32 @@ class ScoutServer(ThreadingHTTPServer):
         result["alignedRoomCount"] = sum(room.get("matterpakAlignmentVerified") is True for room in rooms)
         return result
 
+def room_planning_summary(room):
+    outline = room["outline"]
+    xs, zs = zip(*outline)
+    area = abs(sum(x1 * z2 - x2 * z1 for (x1, z1), (x2, z2) in
+                   zip(outline, outline[1:] + outline[:1]))) / 2
+
+    def point(value):
+        return (isinstance(value, list) and len(value) == 2 and
+                all(type(component) in (int, float) and math.isfinite(component) for component in value))
+
+    actors = [actor for actor in room.get("actors") or [] if point(actor)]
+    camera = room.get("camera")
+    aim = room.get("lookAt")
+    if not point(aim) and actors:
+        aim = [sum(actor[axis] for actor in actors) / len(actors) for axis in range(2)]
+    aim_depth = None
+    if point(camera) and point(aim):
+        dx, dz = (aim[axis] - camera[axis] for axis in range(2))
+        distance = math.hypot(dx, dz)
+        if distance > .01:
+            projections = [(x * dx + z * dz) / distance for x, z in outline]
+            aim_depth = max(projections) - min(projections)
+    return {"area": area, "xSpan": max(xs) - min(xs), "zSpan": max(zs) - min(zs),
+            "aimDepth": aim_depth, "staged": len(actors) >= 2 and point(camera)}
+
+
 class Handler(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(ROOT / "site"), **kwargs)
@@ -237,6 +264,28 @@ class Handler(SimpleHTTPRequestHandler):
         self.send_header("Content-Length", str(len(payload)))
         self.end_headers()
         self.wfile.write(payload)
+
+    def room_heading(self, model, room_id):
+        if not isinstance(model, str) or not re.fullmatch(r"[A-Za-z0-9]{1,40}", model) or (
+                room_id is not None and not valid_id(room_id)):
+            return self.respond(400, {"error": "Invalid room reference."})
+        room = self.server.room(model, room_id)
+        if room is None or room.get("roomId") != room_id:
+            return self.respond(404, {"error": "Room not found."})
+        if room.get("geometrySource") != "Matterport room boundary":
+            return self.respond(200, {"status": "unknown", "reason": "This outline has no confirmed Matterport axes."})
+        if not matterport_configured():
+            return self.respond(200, {"status": "unknown", "reason": "Matterport credentials are unavailable."})
+        heading = self.server.model_headings.get(model)
+        if heading is None:
+            try:
+                heading = model_heading(read_model(model, interactive=False, query=HEADING_QUERY, timeout=8))
+            except (OSError, ValueError):
+                return self.respond(200, {"status": "unknown", "reason": "Matterport heading lookup failed."})
+            if heading is None:
+                return self.respond(200, {"status": "unknown", "reason": "Matterport returned no usable georeferencing."})
+            self.server.model_headings[model] = heading
+        return self.respond(200, {"status": "ready", "heading": heading, "source": "Matterport GeoCoordinates"})
 
     def room_lighting(self, data, save=False, evaluate=False):
         model, room_id = data.get("model"), data.get("room")
@@ -446,7 +495,7 @@ class Handler(SimpleHTTPRequestHandler):
                 except ValueError:
                     remaining = 0
                 if not 0 < remaining <= MAX_ARCHIVE_BYTES:
-                    return self.respond(413, {"error": "Select a ZIP up to 250 MB."})
+                    return self.respond(413, {"error": "Select a MatterPak ZIP up to 1 GiB."})
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 with tempfile.TemporaryFile() as archive:
                     while remaining:
@@ -462,14 +511,20 @@ class Handler(SimpleHTTPRequestHandler):
                     return self.respond(503, {"error": "Configure the Matterport key and token in the server environment."})
                 download_mesh(model, destination, os.environ["MATTERPORT_API_KEY"],
                               os.environ["MATTERPORT_API_TOKEN"], replace_incomplete=True)
+        except MatterPakSizeError as error:
+            return self.respond(413, {"error": str(error)})
         except MatterPakUnavailable as error:
             return self.respond(422, {"error": str(error)})
         except (URLError, TimeoutError) as error:
             if getattr(error, "code", None) in {401, 403}:
                 return self.respond(403, {"error": "Matterport denied the request. Check the server credentials and access to this bundle."})
             return self.respond(502, {"error": "Matterport did not complete the download. Try again or upload the ZIP."})
-        except (OSError, ValueError, zipfile.BadZipFile):
-            return self.respond(422, {"error": "The MatterPak archive could not be imported. Check that it contains a usable mesh and fits within the size limits."})
+        except zipfile.BadZipFile:
+            return self.respond(422, {"error": "The MatterPak download is not a readable ZIP. Try downloading it again."})
+        except ValueError:
+            return self.respond(422, {"error": "The MatterPak ZIP is missing a usable OBJ, material, or referenced texture."})
+        except OSError:
+            return self.respond(500, {"error": "Scout could not save the MatterPak to its cache. Check available storage and write access."})
         return self.respond(201, {"cached": False})
 
     def save_alignment(self, payload):
@@ -509,6 +564,9 @@ class Handler(SimpleHTTPRequestHandler):
     def do_GET(self):
         url = urlsplit(self.path)
         params = parse_qs(url.query)
+        if url.path == "/api/room-heading":
+            model, room = (params.get(key, [None])[0] for key in ("model", "room"))
+            return self.room_heading(model, room)
         if url.path == "/api/room-lighting":
             return self.room_lighting({key: params.get(key, [None])[0] for key in ("model", "room")})
         if url.path == "/api/room-import-status":
@@ -546,7 +604,8 @@ class Handler(SimpleHTTPRequestHandler):
                               limit=int(params.get("limit", ["12"])[0]),
                               city=params.get("city", [""])[0][:80],
                               category=params.get("category", [""])[0][:80],
-                              linked_only=params.get("linked", [""])[0] == "1", imported_models=imported_models)
+                              linked_only=params.get("linked", [""])[0] == "1", imported_models=imported_models,
+                              natural_light=params.get("natural_light", [""])[0] == "1")
                 rows = page["results"]
                 mode = source_mode(self.server.database)
             except ValueError as error:
@@ -561,8 +620,18 @@ class Handler(SimpleHTTPRequestHandler):
         if url.path == "/api/rooms":
             model = params.get("model", [""])[0]
             rooms = self.server.rooms(model)
-            return self.respond(200, [{"id": room.get("roomId"), "label": room.get("label") or "Imported room",
-                                      "floorId": room.get("floorId")} for room in rooms])
+            summaries = []
+            for room in rooms:
+                summary = {"id": room.get("roomId"), "label": room.get("label") or "Imported room",
+                           "floorId": room.get("floorId")}
+                if params.get("planning") == ["1"]:
+                    try:
+                        summary["planning"] = room_planning_summary(room)
+                    except (TypeError, ValueError, ArithmeticError):
+                        # Keep the room discoverable when an older import lacks usable planning data.
+                        pass
+                summaries.append(summary)
+            return self.respond(200, summaries)
         if url.path == "/api/room":
             model = params.get("model", [""])[0]
             room = self.server.room(model, params.get("room", [None])[0])

@@ -200,7 +200,9 @@ a { color: var(--accent); text-underline-offset: .18em; }
 #agent-form > label:first-child { flex: 1 1 100%; }
 #agent-form > p, #brief-review { flex-basis: 100%; }
 #agent-form > label, #compare-form > label { max-width: 100%; }
-#shot-plan { flex-basis: 100%; }
+#shot-plan, #pan-choice { flex-basis: 100%; }
+#pan-choice button, #agent-options article > button { margin: 4px 6px 4px 0; }
+.agent-revision-form { margin-top: 8px; }
 .shot-plan-controls { display: flex; flex-wrap: wrap; gap: 10px; margin-block: 12px; }
 .shot-plan-controls > p { flex-basis: 100%; }
 #agent-options { display: grid; gap: 10px; margin-block: 12px; }

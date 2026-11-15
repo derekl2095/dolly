@@ -55,7 +55,7 @@ select {max-width:100%} canvas {width:100%;display:block;margin-top:12px;backgro
 #transport input[type="range"] {width:90px;padding:0}
 @media(max-width:700px){.layout{grid-template-columns:1fr}}
 </style>
-<link rel="stylesheet" href="scout-studio.css?v=dolly-daylight">
+<link rel="stylesheet" href="scout-studio.css?v=dolly-catalog">
 </head>
 <body><main>
 <header class="studio-header">
@@ -120,6 +120,11 @@ select {max-width:100%} canvas {width:100%;display:block;margin-top:12px;backgro
 <form id="agent-form">
 <label>Shot brief <input name="brief" maxlength="1200" required placeholder="A 35 mm two-shot in a Houston office"></label>
 <button type="button" id="review-brief">Review brief</button>
+<section id="pan-choice" hidden>
+<p>A pan rotates the camera in place. Dolly can test a sideways slide, which moves the camera.</p>
+<button type="button" id="accept-slide">Use a lateral slide</button>
+<button type="button" id="edit-pan-brief">Revise brief</button>
+</section>
 <details id="shot-plan"><summary>Shot plan</summary><div class="shot-plan-controls">
 <label>Required lens (mm) <input name="lens" type="number" min="15" max="150" placeholder="Optional"></label>
 <label>Required camera move <select name="locked-move"><option value="">Flexible</option><option value="slide">Lateral slide</option><option value="push">Push-in</option><option value="pull">Pull-back</option><option value="static">Static</option></select></label>
@@ -128,7 +133,7 @@ select {max-width:100%} canvas {width:100%;display:block;margin-top:12px;backgro
 <label><input name="require-sightlines" type="checkbox"> Require captured sightlines for agent proposals</label>
 <label><input name="shortlist-only" type="checkbox"> Scout shortlisted scans only</label>
 <label><input name="lock-room" type="checkbox"> Lock current room</label>
-<label><input name="import-outlines" type="checkbox"> Allow the agent to fetch room outlines and MatterPaks</label>
+<label><input name="import-outlines" type="checkbox" checked> Fetch room outlines and MatterPaks as needed</label>
 <label><input name="apply" type="checkbox"> Open checked proposal</label>
 <label>Search city <select name="city"><option value="">Use catalog filter</option><option>Houston</option><option>Los Angeles</option></select></label>
 <label>Search property type <select name="category"><option value="">Use catalog filter</option><option value="office">Office</option><option value="industrial warehouse">Industrial</option><option value="retail">Retail</option><option value="flex">Flex</option><option value="hotel hospitality">Hotel</option><option value="apartment multifamily">Apartment</option><option value="land">Land</option></select></label>
@@ -145,7 +150,7 @@ select {max-width:100%} canvas {width:100%;display:block;margin-top:12px;backgro
 <p id="agent-result" role="status"></p>
 <section id="agent-options" aria-label="Playable shots"></section>
 <details id="agent-tests" hidden>
-<summary>How Scout tested this</summary>
+<summary>How Dolly tested this</summary>
 <section id="agent-evidence" aria-label="Scouting evidence"></section>
 <ol id="agent-activity" aria-label="Scouting activity"></ol>
 </details>
@@ -317,6 +322,7 @@ select {max-width:100%} canvas {width:100%;display:block;margin-top:12px;backgro
 <label>Time zone <input name="timeZone" placeholder="America/Chicago" required></label>
 <p id="daylight-location-source"></p>
 <label>Compass bearing of the plan’s +Z axis (degrees clockwise from true north) <input name="heading" type="number" min="0" max="360" step="any" required></label>
+<p id="daylight-heading-source" aria-live="polite"></p>
 <label><input type="checkbox" name="pick"> Mark a window by clicking four corners around the pane</label>
 <button type="button" id="detect-windows">Suggest windows</button>
 <ul id="window-candidates"></ul>
@@ -341,4 +347,4 @@ select {max-width:100%} canvas {width:100%;display:block;margin-top:12px;backgro
 </div>
 </main>
 <script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js","three-mesh-bvh":"https://cdn.jsdelivr.net/npm/three-mesh-bvh@0.8.3/build/index.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"}}</script>
-<script type="module" src="scout.js?v=dolly-daylight"></script></body></html>
+<script type="module" src="scout.js?v=ranked-rooms"></script></body></html>

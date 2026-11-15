@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import {briefLocationFilters, briefSuggestions, reviewShotBrief, runAgent} from "../site/agent.js";
+import {briefLocationFilters, briefSuggestions, requestsCameraPan, requestsNaturalLight, reviewShotBrief, runAgent, shotRecommendation} from "../site/agent.js";
 
 test("agent ranks qualifying results and rejects a below-minimum shot", async () => {
   let evidence;
@@ -77,7 +77,7 @@ test("a brief searches the catalog and keeps the exact checked setup available a
   let evidence;
   const summary = await runAgent("Houston office, 35 mm lateral slide", {
     lockedLens: 35, allowApply: false, minimumTravel: .7,
-    catalogFilters: {city: "Houston", category: "office"}, activity() {},
+    catalogFilters: {city: "Houston", category: "office", confirmedOnly: true}, activity() {},
     onEvidence(value) { evidence = value; },
     onAlternatives(value) { alternatives = value; },
     apply() { assert.fail("Report-only must not open a shot automatically"); },
@@ -246,8 +246,8 @@ test("shortlist-only runs retain scans with missing room evidence", async () => 
     activity() {},
     onEvidence(value) { evidence = value; },
     async api(path) {
-      if (path === "/api/rooms?model=Ready") return [{id: "room"}];
-      if (path === "/api/rooms?model=Missing") return [];
+      if (path === "/api/rooms?model=Ready&planning=1") return [{id: "room"}];
+      if (path === "/api/rooms?model=Missing&planning=1") return [];
       assert.equal(path, "/api/agent-turn");
       return turns.shift();
     },
@@ -323,7 +323,7 @@ test("continuing a confirmed-outline search preserves hard filters and includes 
   const calls = ["search_locations", "continue_location_search"];
   const offsets = [];
   await runAgent("Find a Houston office", {
-    catalogFilters: {city: "Houston", category: "office"}, activity() {},
+    catalogFilters: {city: "Houston", category: "office", confirmedOnly: true}, activity() {},
     onEvidence(value) { evidence = value; },
     async api(path) {
       if (path.startsWith("/api/locations?")) {
@@ -593,16 +593,217 @@ test("a search runs the reviewed baseline even when the model never calls the so
           assert.equal(url.searchParams.get("category"), "office");
           return {rows: [{property_id: 1, models: {[model]: "Office"}}],
             scanReadiness: {[model]: {remoteRoomCount: 1, roomCount: 0}}};
-        case "/api/rooms": return [];
+        case "/api/rooms": return actions.includes("/api/import-room") ? [{id: room.roomId}] : [];
         case "/api/import-room": return {imported: 1};
         case "/api/room": return room;
         default: assert.fail(path);
       }
     },
   });
-  assert.deepEqual(actions, ["/api/locations", "/api/rooms", "/api/import-room", "/api/room"]);
+  assert.deepEqual(actions, ["/api/locations", "/api/rooms", "/api/import-room", "/api/rooms", "/api/room"]);
   assert.equal(results.options.length, 1);
   assert.equal(results.options[0].setup.lens, 35);
   assert.equal(results.options[0].setup.moveKind, "push");
   assert.equal(results.options[0].opened, false);
+});
+
+test("pan requests are distinguished from slides and unrelated words", () => {
+  assert.equal(requestsCameraPan("A 35 mm horizontal pan"), true);
+  assert.equal(requestsCameraPan("Panning left from the doorway"), true);
+  assert.equal(requestsCameraPan("A lateral slide past the pantry"), false);
+});
+
+test("automatic comparison backfills three distinct rooms even if the model stops after search", async () => {
+  const models = ["Narrow", "Wide", "Wider", "Extra"];
+  const rooms = new Map(models.map((model, i) => {
+    const width = 3 + i;
+    return [model, {modelId: model, roomId: "room", height: 3, label: model,
+      outline: [[-width, -6], [width, -6], [width, 6], [-width, 6]],
+      camera: [0, 4], lookAt: [0, 0], actors: [[-.5, 0], [.5, 0]], slideAxis: [1, 0]}];
+  }));
+  const turns = [
+    {tool_calls: [{id: "search", function: {name: "search_locations", arguments: '{"query":"office"}'}}]},
+    {content: "Finished."},
+  ];
+  const read = [];
+  let results;
+  await runAgent("Compare offices for a 35 mm lateral slide.", {
+    autoBaseline: true, lockedLens: 35, lockedMove: "slide", minimumTravel: .7, activity() {},
+    onResults(value) { results = value; },
+    async api(path) {
+      const url = new URL(path, "http://localhost");
+      if (url.pathname === "/api/agent-turn") return turns.shift();
+      if (url.pathname === "/api/locations") return {
+        rows: models.map((model, i) => ({property_id: i + 1, models: {[model]: "Office"}})),
+        scanReadiness: Object.fromEntries(models.map(model => [model, {roomCount: 1}])),
+      };
+      if (url.pathname === "/api/rooms") return [{id: "room"}];
+      assert.equal(url.pathname, "/api/room");
+      const model = url.searchParams.get("model");
+      read.push(model);
+      return rooms.get(model);
+    },
+  });
+  assert.deepEqual(read, models.slice(0, 3));
+  assert.equal(new Set(results.options.map(option => option.room.modelId)).size, 3);
+  assert.ok(results.options.every(option => option.setup.lens === 35 && option.setup.travel === .7));
+  assert.match(results.recommendation, /Both setups|more rig clearance/);
+});
+
+test("recommendation explains a measured difference", () => {
+  const first = {travelDifference: 0, clearanceMargin: .7, framingMargin: .2};
+  const second = {travelDifference: 0, clearanceMargin: .3, framingMargin: .2};
+  assert.match(shotRecommendation(first, second), /40 cm more rig clearance/);
+  assert.match(shotRecommendation(first), /only tested setup/);
+});
+
+test("window and daylight language activates scouting without requiring direct sun", () => {
+  assert.equal(requestsNaturalLight("An office with floor-to-ceiling windows"), true);
+  assert.equal(requestsNaturalLight("Lots of natural light, no direct sunlight"), true);
+  assert.equal(requestsNaturalLight("No natural light. Use practicals."), false);
+  assert.equal(requestsNaturalLight("A dark room with a bright lamp"), false);
+});
+
+test("natural-light search prioritizes rooms with window evidence within shot constraints", async () => {
+  const models = ["Plain", "Listing", "Bright"];
+  const rows = models.map((model, i) => ({property_id: i + 1, models: {[model]: "Office"}}));
+  rows[1].propertyLight = {score: 3, phrase: "natural light"};
+  rows[2].scanLight = {Bright: {score: 4, phrase: "large windows"}};
+  const tested = [];
+  let results;
+  let turns = 0;
+  await runAgent("Find an office with large windows for a lateral slide.", {
+    autoBaseline: true, naturalLight: true, lockedLens: 35, lockedMove: "slide", minimumTravel: .7,
+    activity() {}, onResults(value) { results = value; },
+    async api(path, options) {
+      const url = new URL(path, "http://localhost");
+      if (url.pathname === "/api/agent-turn") {
+        assert.ok(!JSON.parse(options.body).tools.some(tool => tool.function.name === "study_daylight"));
+        return turns++ ? {content: "Checked."} : {tool_calls: [{id: "search",
+          function: {name: "search_locations", arguments: '{"query":"office"}'}}]};
+      }
+      if (url.pathname === "/api/locations") {
+        assert.equal(url.searchParams.get("natural_light"), "1");
+        return {rows, scanReadiness: Object.fromEntries(models.map(model => [model, {roomCount: 1}]))};
+      }
+      if (url.pathname === "/api/rooms") return [{id: "room"}];
+      assert.equal(url.pathname, "/api/room");
+      const modelId = url.searchParams.get("model");
+      tested.push(modelId);
+      return {modelId, roomId: "room", height: 3, label: modelId,
+        outline: [[-5, -6], [5, -6], [5, 6], [-5, 6]], camera: [0, 4], lookAt: [0, 0],
+        actors: [[-.5, 0], [.5, 0]], slideAxis: [1, 0]};
+    },
+  });
+  assert.deepEqual(tested, ["Bright", "Listing", "Plain"]);
+  assert.deepEqual(results.options.map(option => option.report.lightEvidence?.source),
+    ["Scan caption", "Property description", undefined]);
+  assert.ok(results.options.every(option => option.setup.lens === 35 && option.setup.travel === .7));
+});
+
+test("catalog scouting pages past an untestable lead and imports a remote scan", async () => {
+  const model = "RemoteOffice";
+  const room = {modelId: model, roomId: "office", label: "Office", height: 3,
+    outline: [[-6, -6], [6, -6], [6, 6], [-6, 6]], camera: [0, 4.8], lookAt: [0, 0],
+    actors: [[-.55, 0], [.55, 0]]};
+  let turn = 0;
+  let results;
+  const offsets = [];
+  const imports = [];
+  await runAgent("Find an office for a push-in.", {
+    autoBaseline: true, allowImport: true, lockedMove: "push", activity() {},
+    onResults(value) { results = value; },
+    async api(path, options) {
+      const url = new URL(path, "http://localhost");
+      switch (url.pathname) {
+        case "/api/agent-turn":
+          return turn++ ? {content: "Finished."} : {tool_calls: [{id: "search", function: {
+            name: "search_locations", arguments: '{"query":"office","importedOnly":true,"confirmedOnly":true}',
+          }}]};
+        case "/api/locations": {
+          assert.equal(url.searchParams.get("linked"), "1");
+          assert.equal(url.searchParams.has("imported"), false);
+          assert.equal(url.searchParams.has("confirmed"), false);
+          const offset = Number(url.searchParams.get("offset") ?? 0);
+          offsets.push(offset);
+          if (!offset) return {rows: [{property_id: 1, models: {Empty: "Office"}}],
+            scanReadiness: {Empty: {roomCount: 0, remoteOutlineStatus: "no-floor-edges"}}, next_offset: 6};
+          return {rows: [{property_id: 2, models: {[model]: "Office"}}],
+            scanReadiness: {[model]: {roomCount: 0, remoteRoomCount: 1}}, next_offset: null};
+        }
+        case "/api/rooms": return imports.length ? [{id: room.roomId}] : [];
+        case "/api/import-room":
+          imports.push(JSON.parse(options.body).model);
+          return {imported: 1};
+        case "/api/room": return room;
+        default: assert.fail(path);
+      }
+    },
+  });
+  assert.deepEqual(offsets, [0, 6]);
+  assert.deepEqual(imports, [model]);
+  assert.equal(results.options[0].room.modelId, model);
+});
+
+test("ranked scans and sibling rooms preserve the shot brief through an automatic retry", async () => {
+  const visited = [];
+  let imported = false;
+  let turns = 0;
+  let evidence, results, opened;
+  const actors = [[-.75, 0], [.75, 0]];
+  const choices = [
+    {id: "default", label: "Small office", planning: {area: 12, xSpan: 3, zSpan: 4, staged: true}},
+    {id: "other", label: "Wide office", planning: {area: 110, xSpan: 11, zSpan: 10, staged: true}},
+    {id: "nearest", label: "Studio", planning: {area: 144, xSpan: 12, zSpan: 12, staged: true}},
+    {id: "void", label: "Void", planning: {area: 900, xSpan: 30, zSpan: 30, staged: true}},
+  ];
+  await runAgent("Find an office with daylight for a 1 m slide at 35 mm.", {
+    naturalLight: true, autoBaseline: true, allowImport: true, allowApply: true,
+    lockedLens: 35, lockedMove: "slide", targetTravel: 1, minimumTravel: 1,
+    onEvidence(value) { evidence = value; }, onResults(value) { results = value; },
+    apply(room, setup) { opened = {room, setup}; }, activity() {},
+    async api(path) {
+      const {pathname, searchParams} = new URL(path, "http://localhost");
+      switch (pathname) {
+        case "/api/agent-turn":
+          return turns++ ? {content: "Finished."} : {tool_calls: [{id: "search", function: {
+            name: "search_locations", arguments: '{"query":"office"}',
+          }}]};
+        case "/api/locations":
+          if (!searchParams.has("offset")) return {
+            rows: [{property_id: 1, name: "Local Office", models: {Local: "Office"}}],
+            scanReadiness: {Local: {roomCount: 1}}, next_offset: 6,
+          };
+          return {rows: [{property_id: 2, name: "Remote Office", models: {Remote: "Large windows"},
+            scanLight: {Remote: {score: 4, phrase: "Large windows"}}}],
+            scanReadiness: {Remote: {remoteRoomCount: 4, roomCount: 0}}};
+        case "/api/rooms":
+          assert.equal(searchParams.get("planning"), "1");
+          return searchParams.get("model") === "Local" ? [{id: "local"}] : imported ? choices : [];
+        case "/api/import-room":
+          assert.equal(visited.length, 0);
+          imported = true;
+          return {imported: choices.length};
+        case "/api/room": {
+          const roomId = searchParams.get("room");
+          visited.push(roomId);
+          return {roomId, modelId: searchParams.get("model"), height: 3, label: roomId,
+            outline: [[-6, -6], [6, -6], [6, 6], [-6, 6]],
+            camera: roomId === "nearest" ? [0, 2] : [0, 4], lookAt: [0, 0], actors, slideAxis: [1, 0]};
+        }
+        case "/api/import-matterpak": return {cached: true};
+        default: assert.fail(path);
+      }
+    },
+  });
+  assert.deepEqual(visited, ["nearest", "local", "other"]);
+  const retry = evidence.candidates.find(report => report.parent);
+  assert.equal(retry.room, "nearest");
+  assert.equal(retry.adjustment, "back up 0.5 m");
+  assert.equal(retry.lens, 35);
+  assert.equal(retry.requested, 1);
+  assert.equal(results.options[0].room.modelId, "Remote");
+  assert.deepEqual(opened.setup, results.options[0].setup);
+  assert.deepEqual(opened.setup.actors, actors);
+  assert.deepEqual(opened.setup.aim, [0, 0]);
 });

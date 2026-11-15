@@ -108,6 +108,40 @@ class CatalogTests(unittest.TestCase):
         self.assertEqual(time_zone_for("NY"), "America/New_York")
 
 
+    def test_natural_light_ranks_scan_evidence_before_paging(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "data").mkdir()
+            db = root / "index.sqlite"
+            address = {"streetNumber": 1, "streetName": "Canal", "city": "Houston", "state": "TX"}
+            examples = [
+                (1, "Office with skylights", {"Dark": "Windowless office"}),
+                (2, "Office with natural light", {"Listing": "Office"}),
+                (3, "Office", {"Bright": "Floor-to-ceiling windows", "Plain": "Office"}),
+            ]
+            (root / "commercial-properties.csv").write_text(
+                "PropertyId,MatterportModelId\n" + "".join(
+                    f"{property_id},{scan}\n" for property_id, _, scans in examples for scan in scans
+                )
+            )
+            rows = [
+                {"id": property_id, "primaryAddress": address, "propertyType": 5,
+                 "notes": [{"value": notes}], "attachments": [
+                     {"videoKey": scan, "caption": caption} for scan, caption in scans.items()
+                 ]}
+                for property_id, notes, scans in examples
+            ]
+            (root / "data/commercial-property.jsonl").write_text("\n".join(map(json.dumps, rows)))
+            self.assertEqual(build(db, root), 3)
+            first = search_page(db, "office", limit=1, natural_light=True)
+            self.assertEqual(first["results"][0]["property_id"], 3)
+            self.assertEqual(first["results"][0]["scanLight"]["Bright"]["phrase"], "Floor-to-ceiling windows")
+            remaining = search_page(db, "office", offset=first["next_offset"], natural_light=True)
+            self.assertEqual([row["property_id"] for row in remaining["results"]], [2, 1])
+            filtered = search_page(db, "office", imported_models={"Plain", "Listing"}, natural_light=True)
+            self.assertEqual([row["property_id"] for row in filtered["results"]], [2, 3])
+            self.assertEqual(filtered["results"][1]["scanLight"], {})
+
     def test_shared_outline_snapshot_distinguishes_remote_ready_and_empty_scans(self):
         from app import ScoutServer, load_outline_index
 

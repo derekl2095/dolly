@@ -256,11 +256,51 @@ def _connect_readonly(database):
         connection.close()
 
 
+VIEW_LIGHT = re.compile(
+    r"\b(?:windowless|no (?:exterior )?windows?|without (?:exterior )?windows?|"
+    r"(?:no|little|minimal|limited|without) (?:direct )?(?:natural light(?:ing)?|daylight))\b", re.I)
+LIGHT_CUES = (
+    (4, re.compile(r"\b(?:floor[ -]to[ -]ceiling (?:windows?|glass|glazing)|"
+                   r"(?:large|oversized|expansive|full[ -]height|exterior|perimeter) windows?|"
+                   r"wall of windows|(?:lots|plenty) of windows|skylights?|clerestory windows?|window[ -]lined|"
+                   r"windowed (?:office|suite|room))\b", re.I)),
+    (3, re.compile(r"\b(?:natural light(?:ing)?|daylit|daylight|sunlit|sun[ -]filled|"
+                   r"sun[ -]drenched|light[ -]filled|sunny|bright and airy)\b", re.I)),
+    (2, re.compile(r"\b(?:windows with (?:views?|exterior exposure)|(?:ribbon|picture|bay) windows?)\b", re.I)),
+)
+
+
+def natural_light_evidence(text):
+    """Find a daylight cue and preserve its source wording for review."""
+    if not text:
+        return None
+    best = None
+    for sentence in re.split(r"(?<=[.!?])\s+|[\n;]+", text):
+        negative = VIEW_LIGHT.search(sentence)
+        if negative:
+            if best is None:
+                best = {"score": -1, "phrase": negative.group(0)}
+            continue
+        for score, pattern in LIGHT_CUES:
+            match = pattern.search(sentence)
+            if match and (best is None or score > best["score"]):
+                best = {"score": score, "phrase": match.group(0)}
+                break
+    return best
+
+
+def light_score(text):
+    cue = natural_light_evidence(text)
+    return cue["score"] if cue else 0
+
+
 def _search_rows(database, brief, limit, offset, *, city, category, linked_only,
-                 imported_models, browse):
+                 imported_models, browse, natural_light=False):
     terms = list(dict.fromkeys(re.findall(r"[^\W_]+", brief.casefold())))
     terms = [term for term in terms if term not in
              {"a", "an", "the", "in", "with", "for", "by", "find", "me", "and"}][:24]
+    if natural_light and terms:
+        terms = list(dict.fromkeys([*terms, "window", "windows", "daylight", "sunlit", "skylight", "skylights", "glazing"]))
     clauses = []
     values = []
     if terms:
@@ -288,10 +328,21 @@ def _search_rows(database, brief, limit, offset, *, city, category, linked_only,
     evidence = (f"coalesce(nullif(snippet(locations, -1, '[', ']', ' … ', 18),''), "
                 f"substr({source}, 1, 300))" if terms else f"substr({source}, 1, 300)")
     rank = "bm25(locations, 0, 5, 5, 4, 2, 4, 1, 2, 0), " if terms else ""
+    light_fields = ", notes AS light_notes" if natural_light else ""
+    if natural_light:
+        eligible = ""
+        if imported_models is not None:
+            eligible = "WHERE scan.key IN (SELECT value FROM json_each(?))"
+            values.append(json.dumps(sorted(imported_models)))
+        caption_rank = ("coalesce((SELECT max(scout_light(scan.value)) "
+                        f"FROM json_each(locations.models) AS scan {eligible}), 0)")
+        rank = f"{caption_rank} DESC, scout_light(notes) DESC, " + rank
     with _connect_readonly(database) as connection:
         connection.row_factory = sqlite3.Row
+        if natural_light:
+            connection.create_function("scout_light", 1, light_score, deterministic=True)
         rows = connection.execute(f"""SELECT property_id, name, street, city, state,
-            category, models, {evidence} AS evidence
+            category, models, {evidence} AS evidence{light_fields}
             FROM locations {where}
             ORDER BY {rank}property_id, rowid LIMIT ? OFFSET ?""", (*values, limit, offset))
         results = []
@@ -299,7 +350,12 @@ def _search_rows(database, brief, limit, offset, *, city, category, linked_only,
             models = json.loads(row["models"])
             if imported_models is not None:
                 models = {model: caption for model, caption in models.items() if model in imported_models}
-            results.append({**dict(row), "models": models})
+            record = {**dict(row), "models": models}
+            if natural_light:
+                record["propertyLight"] = natural_light_evidence(record.pop("light_notes"))
+                record["scanLight"] = {model: cue for model, caption in models.items()
+                                       if (cue := natural_light_evidence(caption))}
+            results.append(record)
         return results
 
 
@@ -311,14 +367,14 @@ def search(database, brief, limit=12, *, city="", category="", linked_only=False
 
 
 def search_page(database, brief="", *, limit=12, offset=0, city="", category="",
-                linked_only=False, imported_models=None):
+                linked_only=False, imported_models=None, natural_light=False):
     """Browse or search. Continue with next_offset and the same filters."""
     if type(limit) is not int or not 1 <= limit <= PAGE_LIMIT:
         raise ValueError(f"limit must be an integer between 1 and {PAGE_LIMIT}")
     if type(offset) is not int or not 0 <= offset < 2**63 - PAGE_LIMIT:
         raise ValueError("offset must be a nonnegative SQLite integer")
     rows = _search_rows(database, brief, limit + 1, offset, city=city, category=category,
-                        linked_only=linked_only, imported_models=imported_models, browse=True)
+                        linked_only=linked_only, imported_models=imported_models, browse=True, natural_light=natural_light)
     return {"results": rows[:limit], "next_offset": offset + limit if len(rows) > limit else None}
 
 

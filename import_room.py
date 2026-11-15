@@ -25,6 +25,39 @@ OPENINGS_QUERY = """query Openings($id: ID!) { model(id: $id) {
 } }"""
 
 
+# Imported outlines store Model API floor (x, y) directly as Scout (x, z).
+# Sample that directed axis in the Model API, independent of Showcase rotation.
+HEADING_QUERY = """query Heading($id: ID!) { model(id: $id) {
+  geocoordinates {
+    origin: geoLocationOf(modelLocation: {x: 0, y: 0, z: 0}) { lat long }
+    plusZ: geoLocationOf(modelLocation: {x: 0, y: 10, z: 0}) { lat long }
+  }
+} }"""
+
+
+def model_heading(payload):
+    """Calculate the true bearing of Scout's +Z from Matterport's two geo samples."""
+    try:
+        geo = payload["data"]["model"]["geocoordinates"]
+        lat1, lon1, lat2, lon2 = (
+            float(geo[point][axis]) for point in ("origin", "plusZ") for axis in ("lat", "long")
+        )
+    except (KeyError, TypeError, ValueError, OverflowError):
+        return None
+    if not all(-90 < lat < 90 for lat in (lat1, lat2)) or not all(-180 <= lon <= 180 for lon in (lon1, lon2)):
+        return None
+    a, b, delta = map(math.radians, (lat1, lat2, lon2 - lon1))
+    east = math.sin(delta) * math.cos(b)
+    north = math.cos(a) * math.sin(b) - math.sin(a) * math.cos(b) * math.cos(delta)
+    separation = 2 * 6371008.8 * math.asin(min(1, math.hypot(
+        math.sin((b - a) / 2), math.sqrt(math.cos(a) * math.cos(b)) * math.sin(delta / 2)
+    )))
+    # Reject coincident points or a transform that fails to preserve this meter-scale baseline.
+    if not 5 <= separation <= 15:
+        return None
+    return round(math.degrees(math.atan2(east, north)) % 360, 2) % 360
+
+
 def opening_candidates(room, outline_points, floor_height):
     winding = sum(a[0]*b[1] - a[1]*b[0]
                   for a, b in zip(outline_points, outline_points[1:] + outline_points[:1]))
@@ -140,7 +173,7 @@ def stage(points):
     raise ValueError("Could not place the starter shot inside the returned outline.")
 
 
-def read_model(model_id, *, interactive=True, query=QUERY):
+def read_model(model_id, *, interactive=True, query=QUERY, timeout=45):
     key = os.getenv("MATTERPORT_API_KEY")
     token = os.getenv("MATTERPORT_API_TOKEN")
     if interactive:
@@ -152,7 +185,7 @@ def read_model(model_id, *, interactive=True, query=QUERY):
     request = Request("https://api.matterport.com/api/models/graph",
                       json.dumps({"query": query, "variables": {"id": model_id}}).encode(),
                       {"Authorization": f"Basic {auth}", "Content-Type": "application/json"})
-    with urlopen(request, timeout=45) as response:
+    with urlopen(request, timeout=timeout) as response:
         return json.load(response)
 
 
