@@ -407,8 +407,12 @@ a { color: var(--accent); text-underline-offset: .18em; }
 .furniture-tools { padding: 0 10px 10px; }
 .plan-edit-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
 .plan-edit-actions button { min-width: 0; min-height: 38px; padding: 6px 8px; font-size: .85rem; }
-#furniture-sizing { display: flex; gap: 8px; align-items: end; flex-wrap: wrap; width: 100%; padding-top: 8px; }
-#furniture-sizing label { display: grid; gap: 4px; font-size: .8rem; }
+.plan-object-controls { border-top: 1px solid var(--line); padding-top: 10px; margin-top: 10px; }
+.plan-object-controls h3 { margin: 0 0 6px; font-size: .9rem; }
+.plan-object-controls p { margin: 0 0 8px; color: var(--muted); font-size: .8rem; }
+.plan-object-controls > button { margin-top: 8px; }
+#actor-sizing, #furniture-sizing { display: flex; gap: 8px; align-items: end; flex-wrap: wrap; width: 100%; padding-top: 8px; }
+#actor-sizing label, #furniture-sizing label { display: grid; gap: 4px; font-size: .8rem; }
 #furniture-height { width: 82px; }
 #delete-furniture { min-height: 42px; color: #ffb6a5; }
 #pan-plan { display: inline-grid; place-items: center; min-width: 34px; }

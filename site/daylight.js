@@ -1,3 +1,4 @@
+import {actorHeight, defaultActorHeight, standIn} from "./room-state.js";
 import {createRelight} from "./relight.js?v=dark-panes";
 import {scanWindowCandidates} from "./window-detection.js?v=mesh-gap9";
 async function request(path, options) {
@@ -90,7 +91,7 @@ export function findWindowWall(THREE, outline, ray) {
   return closest;
 }
 
-export function mountDaylight({THREE, room, mesh, scene, renderer, fill, marks, isAligned, canvas, camera, signal, actors, render, showFloorPatch}) {
+export function mountDaylight({THREE, room, mesh, scene, renderer, fill, marks, isAligned, canvas, camera, signal, actors, actorHeights, render, showFloorPatch}) {
   const panel = document.querySelector("#daylight");
   const frames = new Map();
   let acceleration;
@@ -435,7 +436,7 @@ export function mountDaylight({THREE, room, mesh, scene, renderer, fill, marks, 
       update();
       return;
     }
-    const positions = actors().map((point, i) => point && {index: i + 1, point: [point[0], 1.49, point[1]]}).filter(Boolean);
+    const positions = actors().map((point, i) => point && {index: i + 1, point: [point[0], standIn.eyeHeight * actorHeight(actorHeights?.(), i) / defaultActorHeight, point[1]]}).filter(Boolean);
     try {
       const values = positions.map(item => item.point);
       const result = await request("/api/daylight-study", {

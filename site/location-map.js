@@ -10,23 +10,7 @@ let loading;
 let map;
 let pins;
 let generation = 0;
-let total = 0;
-let failed = false;
 let lookup = new AbortController();
-let pending = 0;
-let selectedProperty;
-
-function selectProperty(id, card) {
-  const previous = locations.get(selectedProperty);
-  previous?.card.classList.remove("map-selected");
-  previous?.marker.getElement()?.classList.remove("map-selected");
-  previous?.marker.setZIndexOffset(0);
-  selectedProperty = id;
-  card.classList.add("map-selected");
-  const marker = locations.get(id)?.marker;
-  marker?.getElement()?.classList.add("map-selected");
-  marker?.setZIndexOffset(500);
-}
 
 function loadLibrary() {
   if (loading) return loading;
@@ -66,101 +50,57 @@ function fit() {
   else map.setView(cityViews.get(city) || [39, -98], city ? 11 : 4, {animate: false});
 }
 
-function showCity() {
-  if (!pins) return;
-  const city = cityKey(cityPicker.value);
-  map.closePopup();
-  pins.clearLayers();
-  for (const location of locations.values()) {
-    if (!city || location.city === city) location.marker.addTo(pins);
-  }
-  const selected = locations.get(selectedProperty);
-  if (selected) selected.marker.getElement()?.classList.add("map-selected");
-  updateStatus();
-  fit();
-}
-
-function updateStatus() {
-  if (pending) {
-    status.textContent = "Finding property addresses…";
-    return;
-  }
-  const count = pins.getLayers().length;
-  status.textContent = cityPicker.value
-    ? `${count} of ${total} loaded properties mapped in ${cityPicker.value}`
-    : count ? `${count} of ${total} loaded properties mapped`
-    : failed ? "Address lookup is temporarily unavailable." : "No matching addresses could be mapped.";
-}
-
-cityPicker.addEventListener("change", showCity);
-
 export function resetLocationMap(city = "") {
   generation++;
   lookup.abort();
   lookup = new AbortController();
-  total = 0;
-  pending = 0;
-  failed = false;
-  selectedProperty = undefined;
   locations.clear();
   cityPicker.selectedIndex = Math.max(0, [...cityPicker.options].findIndex(option => cityKey(option.value) === cityKey(city)));
   pins?.clearLayers();
   panel.hidden = true;
 }
 
-export async function addMapLocations(rows, cards) {
+export async function loadLocationMap(filters, openProperty) {
   const current = generation;
   const {signal} = lookup;
-  total += rows.length;
-  pending++;
+  const query = new URLSearchParams(filters);
+  query.set("map", "1");
   panel.hidden = surface.hidden = false;
-  status.textContent = "Finding property addresses…";
+  status.textContent = "Loading all matching locations…";
   try {
-    const L = await loadLibrary();
+    const [L, response] = await Promise.all([loadLibrary(), fetch("/api/locations?" + query, {signal})]);
+    if (!response.ok) throw Error("Map request failed.");
+    const {rows} = await response.json();
     if (current !== generation || signal.aborted) return;
-    fit();
-    let index = 0;
-    const locateNext = async () => {
-      while (index < rows.length && !signal.aborted && current === generation) {
-        const item = index++;
-        const row = rows[item];
+    for (const row of rows) {
+      if (!Number.isFinite(row.latitude) || !Number.isFinite(row.longitude)) continue;
+      const label = row.name || row.street;
+      const popup = document.createElement("div");
+      const title = document.createElement("strong");
+      title.textContent = label;
+      const button = document.createElement("button");
+      button.type = "button";
+      button.textContent = "Show property";
+      button.addEventListener("click", async () => {
+        button.disabled = true;
         try {
-          const response = await fetch("/api/location-map?property=" + encodeURIComponent(row.property_id), {signal});
-          if (!response.ok) throw Error("Could not look up address.");
-          const {position} = await response.json();
-          if (!position || signal.aborted || current !== generation) continue;
-          const label = row.name || row.street;
-          const popup = document.createElement("div");
-          const title = document.createElement("strong");
-          title.textContent = label;
-          const button = document.createElement("button");
-          button.type = "button";
-          button.textContent = "Show property";
-          button.addEventListener("click", () => {
-            map.closePopup();
-            selectProperty(row.property_id, cards[item]);
-            cards[item].focus();
-          });
-          const source = document.createElement("small");
-          source.textContent = position.approximate ? "Approximate street address" : "CoStar property coordinates";
-          popup.append(title, source, button);
-          const marker = L.marker([position.latitude, position.longitude], {
-            title: label, alt: label,
-            icon: L.divIcon({className: "scout-map-pin", iconSize: [16, 16], iconAnchor: [8, 8]}),
-          }).bindPopup(popup);
-          marker.on("click", () => selectProperty(row.property_id, cards[item]));
-          const city = cityKey(row.city);
-          locations.set(row.property_id, {city, marker, card: cards[item]});
-          if (!cityPicker.value || cityKey(cityPicker.value) === city) marker.addTo(pins);
+          await openProperty(row.property_id, signal);
+          map.closePopup();
         } catch {
-          if (!signal.aborted && current === generation) failed = true;
+          if (!signal.aborted) button.textContent = "Retry property";
+        } finally {
+          button.disabled = false;
         }
-      }
-    };
-    await Promise.all(Array.from({length: Math.min(3, rows.length)}, locateNext));
-    if (current !== generation || signal.aborted) return;
-    if (--pending) return;
-    showCity();
+      });
+      popup.append(title, button);
+      const marker = L.marker([row.latitude, row.longitude], {
+        title: label, alt: label,
+        icon: L.divIcon({className: "scout-map-pin", iconSize: [16, 16], iconAnchor: [8, 8]}),
+      }).bindPopup(popup).addTo(pins);
+      locations.set(row.property_id, {city: cityKey(row.city), marker});
+    }
+    status.textContent = `${locations.size} of ${rows.length} matching properties mapped`;
+    fit();
   } catch {
     if (current !== generation || signal.aborted) return;
     status.textContent = "Map unavailable. Property results are still available.";

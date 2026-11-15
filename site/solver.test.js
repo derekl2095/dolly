@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import {existsSync, readFileSync} from "node:fs";
 import test from "node:test";
-import {editorShotState, readShotExport, roundStroke, slideEndpoints, tracePath} from "./path.js";
+import {checkFraming, editorShotState, readShotExport, roundStroke, slideEndpoints, tracePath} from "./path.js";
+import {savedStagingFingerprint, stagingFingerprint} from "./room-state.js";
 import {solveShot} from "./solver.js";
 import {compareRooms} from "./compare.js";
 import {planProjection} from "./plan-projection.js";
@@ -203,4 +204,41 @@ test("the editor applies solved aim, actors, and endpoint pose", () => {
   assert.match(source, /setup\.actors/);
   assert.match(source, /pose\.lens/);
   assert.match(source, /pose\.travel/);
+});
+
+
+test("actor height changes framing while preserving the default for older shots", () => {
+  const settings = {focal: 35, width: 36, aspect: 16 / 9, cameraHeight: 1.42, aimHeight: 1.22};
+  const frame = actorHeights => checkFraming([0, 4], [0, 4], [0, 0], [null, [0, 0]],
+    {...settings, actorHeights}).margin;
+  assert.equal(frame(), frame([null, 1.61]));
+  assert.ok(frame() > 0);
+  assert.ok(frame([null, 2.8]) < 0);
+});
+
+
+test("furniture can block visibility without touching the camera rig or needing a scan", () => {
+  const room = rectangle({width: 10, depth: 10, camera: [5, 8],
+    actors: [[4.6, 2], [5.4, 2]], aim: [5, 2]});
+  const divider = {name: "Divider", min: [3, 4], max: [7, 4.5], height: 2};
+  const constraints = {...shot, move: "static", minimumTravel: 0, keepMark: true};
+  const blocked = solveShot(room, {...constraints, obstacles: [divider]});
+  assert.equal(blocked.status, "fail");
+  assert.equal(blocked.evaluation.clearanceRejected, 0);
+  assert.ok(blocked.evaluation.furnitureSightlineRejected > 0);
+  assert.equal(solveShot(room, {...constraints, obstacles: [{...divider, height: .7}]}).status, "pass");
+  assert.equal(solveShot(room, {...constraints, obstacles: [
+    {...divider, min: [7, 4], max: [8, 4.5]},
+  ]}).status, "pass");
+});
+
+test("staging snapshots ignore implicit defaults and distinguish edits", () => {
+  const room = rectangle();
+  const divider = {name: "Divider", min: [3, 4], max: [4, 4.5]};
+  assert.equal(savedStagingFingerprint(room), stagingFingerprint(room.actors, [1.61, 1.61], []));
+  const tested = stagingFingerprint(room.actors, undefined, [divider]);
+  assert.notEqual(stagingFingerprint(room.actors, [2, 1.61], [divider]), tested);
+  assert.notEqual(stagingFingerprint(room.actors, undefined, [
+    {...divider, min: [2, 4], max: [3, 4.5]},
+  ]), tested);
 });

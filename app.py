@@ -24,7 +24,7 @@ from urllib.parse import parse_qs, unquote, urlsplit
 import daylight
 
 from catalog import (
-    build, coordinates_indexed, index_property_coordinates, scan_location, scan_property, search_page,
+    build, coordinates_indexed, index_property_coordinates, map_locations, scan_location, scan_property, search_page,
     source_mode, with_site_coordinates,
 )
 from fetch_matterpak import MAX_ARCHIVE_BYTES, MatterPakSizeError, MatterPakUnavailable, download_mesh, mesh_assets, stored_locally, unpack
@@ -599,13 +599,21 @@ class Handler(SimpleHTTPRequestHandler):
                     if confirmed:
                         imported_models.update(model for model, (_, count) in
                                                self.server.outline_index.items() if count)
-                page = search_page(self.server.database, params.get("q", [""])[0][:240],
-                              offset=int(params.get("offset", ["0"])[0]),
-                              limit=int(params.get("limit", ["12"])[0]),
-                              city=params.get("city", [""])[0][:80],
-                              category=params.get("category", [""])[0][:80],
-                              linked_only=params.get("linked", [""])[0] == "1", imported_models=imported_models,
-                              natural_light=params.get("natural_light", [""])[0] == "1")
+                filters = {"city": params.get("city", [""])[0][:80],
+                           "category": params.get("category", [""])[0][:80],
+                           "linked_only": params.get("linked", [""])[0] == "1",
+                           "imported_models": imported_models}
+                query = params.get("q", [""])[0][:240]
+                if params.get("map") == ["1"]:
+                    return self.respond(200, {"rows": map_locations(self.server.database, query, **filters)})
+                property_id = params.get("property", [None])[0]
+                if property_id is not None and not re.fullmatch(r"[0-9]{1,15}", property_id):
+                    raise ValueError("Invalid property ID.")
+                page = search_page(self.server.database, query, **filters,
+                                   offset=int(params.get("offset", ["0"])[0]),
+                                   limit=int(params.get("limit", ["12"])[0]),
+                                   property_id=int(property_id) if property_id is not None else None,
+                                   natural_light=params.get("natural_light") == ["1"])
                 rows = page["results"]
                 mode = source_mode(self.server.database)
             except ValueError as error:

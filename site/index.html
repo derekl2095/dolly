@@ -55,7 +55,7 @@ select {max-width:100%} canvas {width:100%;display:block;margin-top:12px;backgro
 #transport input[type="range"] {width:90px;padding:0}
 @media(max-width:700px){.layout{grid-template-columns:1fr}}
 </style>
-<link rel="stylesheet" href="scout-studio.css?v=dolly-planner">
+<link rel="stylesheet" href="scout-studio.css?v=staging-controls">
 </head>
 <body><main>
 <header class="studio-header">
@@ -264,16 +264,29 @@ select {max-width:100%} canvas {width:100%;display:block;margin-top:12px;backgro
 </div>
 <div class="furniture-tools" hidden>
 <div class="plan-edit-actions">
-<button id="add-actor" type="button" disabled>Add actor</button>
-<button id="mark-obstacle" type="button" aria-pressed="false">Add furniture</button>
 <button id="draw-curve" type="button" aria-pressed="false" disabled>Draw path</button>
 <button id="center-aim" type="button" disabled>Aim at actors</button>
 </div>
+<section class="plan-object-controls" aria-label="Actors">
+<h3>Actors</h3>
+<div id="actor-sizing" hidden>
+<label>Actor <select id="actor-selection"></select></label>
+<label>Standing height (m) <input type="number" id="actor-height" min=".5" max="3" step="any"></label>
+<button id="place-actor" type="button">Move actor</button>
+<button id="remove-actor" type="button">Remove actor</button>
+</div>
+<button id="add-actor" type="button" disabled>Add actor</button>
+</section>
+<section class="plan-object-controls" aria-label="Furniture">
+<h3>Furniture</h3>
+<p>Drag a marked box on the plan to move it. The 3D preview follows.</p>
 <div id="furniture-sizing" hidden>
 <label>Furniture <select id="furniture-selection"></select></label>
 <label>Height (m) <input type="number" id="furniture-height" min="0" max="12" step="any"></label>
 <button id="delete-furniture" type="button">Delete selected</button>
 </div>
+<button id="mark-obstacle" type="button" aria-pressed="false">Add furniture</button>
+</section>
 </div>
 <p id="plan-instructions" role="status" hidden>Drag empty space to orbit. Drag a handle to move it.</p>
 </div></div>
@@ -306,6 +319,7 @@ select {max-width:100%} canvas {width:100%;display:block;margin-top:12px;backgro
 <details id="alignment-tools" hidden>
 <summary>Advanced scan alignment</summary>
 <form id="alignment">
+<p>Set which height in the captured mesh counts as floor level. Saving shifts the scan vertically so the camera and actors sit on the floor. Confirm alignment before using captured sightlines or daylight calibration.</p>
 <p>Check that the gold outline follows the room walls where they meet the scanned floor. Use the angled view to check whether the outline floats above or sinks below the floor.</p>
 <div class="alignment-actions">
 <button type="button" id="alignment-view" aria-pressed="false">Show floor overlay</button>
@@ -353,4 +367,4 @@ select {max-width:100%} canvas {width:100%;display:block;margin-top:12px;backgro
 </div>
 </main>
 <script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js","three-mesh-bvh":"https://cdn.jsdelivr.net/npm/three-mesh-bvh@0.8.3/build/index.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"}}</script>
-<script type="module" src="scout.js?v=dolly-planner"></script></body></html>
+<script type="module" src="scout.js?v=furniture-sightlines"></script></body></html>

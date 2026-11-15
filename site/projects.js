@@ -57,6 +57,8 @@ export function parseProjectArchive(text) {
       Number.isFinite(shot.travel) && shot.travel >= 0 && shot.travel <= 4 &&
       Array.isArray(shot.actors) && shot.actors.length >= 2 && shot.actors.length <= maxActors &&
       shot.actors.every(actor => actor == null || point(actor)) &&
+      (shot.actorHeights == null || (Array.isArray(shot.actorHeights) && shot.actorHeights.length <= maxActors &&
+        shot.actorHeights.every(height => height == null || (Number.isFinite(height) && height >= .5 && height <= 3)))) &&
       (shot.obstacles == null || (Array.isArray(shot.obstacles) &&
         shot.obstacles.every(item => isObject(item) && isText(item.name, 500) &&
           (item.height == null || (Number.isFinite(item.height) && item.height >= 0 && item.height <= 12)) &&

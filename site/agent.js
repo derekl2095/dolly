@@ -1,6 +1,6 @@
 import {isVoidRoom} from "./location-labels.js";
-import {actorMarks, loadShot, outlineMeasurements} from "./room-state.js";
-import {compareCapturedRooms} from "./compare.js?v=dolly-catalog";
+import {actorHeight, defaultActorHeight, standIn, actorMarks, loadShot, outlineMeasurements, stagingFingerprint} from "./room-state.js?v=furniture-sightlines";
+import {compareCapturedRooms} from "./compare.js?v=furniture-sightlines";
 
 const definitions = [
   ["search_locations", "Search the full catalog of CoStar-linked Matterport scans, including scans that have never been downloaded. The crew's catalog filters apply.", {query: {type: "string"}, city: {type: ["string", "null"]}, category: {type: ["string", "null"]}}],
@@ -244,7 +244,7 @@ export async function runAgent(brief, {activity, apply, naturalLight = false, lo
     minimumTravel > 0 ? `Minimum travel is ${minimumTravel} m. A shorter fallback may be reported but cannot be applied.` : "",
     lockedRoom ? "The current room is locked. Any applied proposal must be an in-place revision." : "",
     current ? `Open editor: ${JSON.stringify(current)}.` : "There is no open shot.",
-    "New-room comparisons check walls, marked furniture and sampled framing, with optional sampled sightlines against aligned scans. Current-room revisions also check marked furniture and require sampled mesh sightlines when the editor enables that option.",
+    "New-room comparisons check walls, sampled framing and both rig clearance and eye-level visibility against marked furniture, with optional sampled sightlines against aligned scans. Current-room revisions also check marked furniture and require sampled mesh sightlines when the editor enables that option.",
     "compare_setups ranks by constraint compliance, distance from the crew’s target travel when set, otherwise requested travel shortfall, sampled sightlines, rig clearance, and framing margin. Explain any choice that differs from that technical ranking using the crew’s stated preferences.",
     "Interpret the brief in concrete technical terms and preserve the director’s stated intent. For example, drift closer is a push-in; both actors must stay visible requires framing checks throughout. Do not invent numeric constraints from vague creative language or change actor marks, a specified lens or move as a workaround.",
     autoBaseline ? "Dolly automatically tests up to six distinct rooms to find three qualifying shots using the reviewed baseline. Read its measurements before choosing further checks. Find a playable shot before pursuing daylight preferences. Only study daylight with a supplied shoot date and time window." : "",
@@ -346,7 +346,10 @@ export async function runAgent(brief, {activity, apply, naturalLight = false, lo
       lightEvidence: await daylightEvidence(room),
       unverified: result.sightlinesSampled ? ["unmarked furniture"] : ["unmarked furniture", "captured sightlines"],
       ...(parent ? {parent, adjustment} : {})};
-    candidates.set(id, {room, setup: result.setup, report, staging: result.staging, captured});
+    const {actors, actorHeights, obstacles} = result.staging;
+    const setup = result.setup && {...result.setup,
+      testedStaging: stagingFingerprint(actors, actorHeights, obstacles)};
+    candidates.set(id, {room, setup, report, staging: result.staging, captured});
     activity(`${parent ? `Retried ${parent} (${adjustment}) in` : "Checked"} ${room.label || room.modelId} at ${lens} mm: ${result.reason}`);
     return report;
   }
@@ -378,9 +381,9 @@ export async function runAgent(brief, {activity, apply, naturalLight = false, lo
     const lens = lockedLens ?? current?.lens ?? 35;
     const travel = move === "static" ? 0 : (targetTravel ?? Math.max(minimumTravel, .7));
     const report = await checkCandidate(room, {move, lens, travel, captured: requireSightlines});
-    const {framingRejected, sightlineRejected, clearanceRejected} = report.evaluation ?? {};
+    const {framingRejected, sightlineRejected, furnitureSightlineRejected, clearanceRejected} = report.evaluation ?? {};
     if (report.solverStatus !== "fail" || automaticRetries.has(roomKey) || retried.size >= 6) return report;
-    const adjustment = framingRejected ? "back_up" : sightlineRejected || clearanceRejected ? "shift_right" : null;
+    const adjustment = framingRejected ? "back_up" : sightlineRejected || furnitureSightlineRejected || clearanceRejected ? "shift_right" : null;
     if (!adjustment) return report;
     automaticRetries.add(roomKey);
     try {
@@ -537,7 +540,10 @@ export async function runAgent(brief, {activity, apply, naturalLight = false, lo
             !Number.isInteger(args.stepMinutes) || args.stepMinutes < 1 ||
             (end - start) / (args.stepMinutes * 60000) >= 24)
           throw Error("Use an offset timestamp range with at most 24 samples.");
-        const actors = actorMarks(room, loadShot(room)).filter(Boolean).map(([x, z]) => [x, 1.49, z]);
+        const savedShot = loadShot(room);
+        const actors = actorMarks(room, savedShot).flatMap((point, index) => point
+          ? [[point[0], standIn.eyeHeight * actorHeight(savedShot?.actorHeights ?? room.actorHeights, index) / defaultActorHeight, point[1]]]
+          : []);
         const result = await api("/api/daylight-study", {
           method: "POST", headers: {"Content-Type": "application/json"},
           body: JSON.stringify({model: room.modelId, room: room.roomId ?? null, start: args.start,

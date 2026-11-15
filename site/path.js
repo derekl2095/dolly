@@ -1,4 +1,4 @@
-import {maxActors} from "./room-state.js?v=spatial-plan";
+import {actorHeight, defaultActorHeight, maxActors} from "./room-state.js?v=staging-controls";
 
 export function easedPathFraction(timeFraction) {
   return timeFraction * timeFraction * (3 - 2 * timeFraction);
@@ -207,10 +207,13 @@ export function checkFraming(start, end, aim, actors, settings) {
     const fx = dx / length, fy = dy / length, fz = dz / length;
     const rx = -dz / run, rz = dx / run;
     const ux = -rz * fy, uy = run / length, uz = rx * fy;
-    for (const [ax, az] of actors) {
+    for (const [actorIndex, actor] of actors.entries()) {
+      if (!actor) continue;
+      const [ax, az] = actor;
+      const heightScale = actorHeight(settings.actorHeights, actorIndex) / defaultActorHeight;
       for (const i of [-.17, .17]) for (const j of [-.17, .17]) {
         for (const height of [.25, 1.61]) {
-          const px = ax + i - x, pz = az + j - z, py = height - cameraHeight;
+          const px = ax + i - x, pz = az + j - z, py = height * heightScale - cameraHeight;
           const depth = px * fx + py * fy + pz * fz;
           const remaining = depth <= .03 ? -Infinity : 1 - Math.max(
             Math.abs(px * rx + pz * rz) / (depth * horizontal),
@@ -250,6 +253,8 @@ export function readShotExport(text) {
       ![shot.start, shot.end, shot.aim].every(point) ||
       !Array.isArray(shot.actors) || shot.actors.length < 2 || shot.actors.length > maxActors ||
       !shot.actors.every(actor => actor === null || point(actor)) ||
+      (shot.actorHeights != null && (!Array.isArray(shot.actorHeights) || shot.actorHeights.length > maxActors ||
+        !shot.actorHeights.every(value => value == null || bounded(value, .5, 3)))) ||
       (shot.aimHeight != null && !bounded(shot.aimHeight, 0, 100)) ||
       !bounded(shot.cameraHeight, .15, 4) || !bounded(shot.sensorWidthMm, 8, 65) ||
       !bounded(shot.rigRadius, .05, 1.5) || !bounded(shot.durationSeconds, .5, 30) ||
@@ -276,7 +281,7 @@ export function readShotExport(text) {
     : ["slide", "push", "pull"].includes(shot.moveKind) ? shot.moveKind : "custom";
   return {modelId: shot.modelId, roomId: shot.roomId, setup: {
     ...path, travel: moveKind === "static" ? 0 : Math.min(path.travel, 4),
-    moveKind, aim: shot.aim, aimHeight: shot.aimHeight, aimLocked: shot.aimLocked !== false, actors: shot.actors,
+    moveKind, aim: shot.aim, aimHeight: shot.aimHeight, aimLocked: shot.aimLocked !== false, actors: shot.actors, actorHeights: shot.actorHeights,
     obstacles: shot.obstacles, lens: shot.focalLengthMm, cameraHeight: shot.cameraHeight,
     sensorWidthMm: shot.sensorWidthMm, rigRadius: shot.rigRadius, durationSeconds: shot.durationSeconds,
     keepMark: shot.keepMark !== false, requireSightlines: shot.requireSightlines === true,

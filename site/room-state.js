@@ -36,6 +36,13 @@ export const standIn = Object.freeze({
   bodyRadius: .17, bodyLength: 1.03, bodyCenter: .69, headRadius: .115, eyeHeight: 1.49,
   colors: Object.freeze(["#b98c66", "#728d9f", "#819773", "#a289a5"]),
 });
+export const defaultActorHeight = 1.61;
+
+export function actorHeight(heights, index) {
+  const value = heights?.[index];
+  return Number.isFinite(value) && value >= .5 && value <= 3 ? value : defaultActorHeight;
+}
+
 export const defaultFurnitureHeight = .75;
 
 export function furnitureHeight(obstacle) {
@@ -54,6 +61,18 @@ export function actorCenter(actors) {
   const placed = actors.filter(Boolean);
   if (!placed.length) return null;
   return [0, 1].map(axis => placed.reduce((sum, point) => sum + point[axis], 0) / placed.length);
+}
+
+export function stagingFingerprint(actors, heights, obstacles) {
+  return JSON.stringify([
+    actors.map((point, index) => point ? [point, actorHeight(heights, index)] : null),
+    obstacles.map(item => [item.name, item.min, item.max, furnitureHeight(item)]),
+  ]);
+}
+
+export function savedStagingFingerprint(room) {
+  const saved = loadShot(room);
+  return stagingFingerprint(actorMarks(room, saved), saved?.actorHeights ?? room.actorHeights, loadObstacles(room));
 }
 
 export function loadShot(room) {

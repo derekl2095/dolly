@@ -295,7 +295,7 @@ def light_score(text):
 
 
 def _search_rows(database, brief, limit, offset, *, city, category, linked_only,
-                 imported_models, browse, natural_light=False):
+                 imported_models, browse, natural_light=False, property_id=None, map_only=False):
     terms = list(dict.fromkeys(re.findall(r"[^\W_]+", brief.casefold())))
     terms = [term for term in terms if term not in
              {"a", "an", "the", "in", "with", "for", "by", "find", "me", "and"}][:24]
@@ -313,6 +313,9 @@ def _search_rows(database, brief, limit, offset, *, city, category, linked_only,
         category = " ".join(category.lower().split())
         clauses.append("lower(category) = ?")
         values.append(CATEGORY_ALIASES.get(category, category))
+    if property_id is not None:
+        clauses.append("locations.property_id = ?")
+        values.append(property_id)
     if linked_only:
         clauses.append("models <> '{}'")
     if imported_models is not None:
@@ -339,6 +342,15 @@ def _search_rows(database, brief, limit, offset, *, city, category, linked_only,
         rank = f"{caption_rank} DESC, scout_light(notes) DESC, " + rank
     with _connect_readonly(database) as connection:
         connection.row_factory = sqlite3.Row
+        if map_only:
+            has_coordinates = connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE name = 'property_coordinates'").fetchone()
+            coordinates = ("latitude, longitude FROM locations LEFT JOIN property_coordinates "
+                           "ON property_coordinates.property_id = locations.property_id"
+                           if has_coordinates else "NULL AS latitude, NULL AS longitude FROM locations")
+            rows = connection.execute(f"SELECT locations.property_id, name, street, city, {coordinates} {where}",
+                                      values)
+            return [dict(row) for row in rows]
         if natural_light:
             connection.create_function("scout_light", 1, light_score, deterministic=True)
         rows = connection.execute(f"""SELECT property_id, name, street, city, state,
@@ -366,15 +378,20 @@ def search(database, brief, limit=12, *, city="", category="", linked_only=False
                         linked_only=linked_only, imported_models=imported_models, browse=False)
 
 
+def map_locations(database, brief="", *, city="", category="", linked_only=False, imported_models=None):
+    return _search_rows(database, brief, None, 0, city=city, category=category, linked_only=linked_only,
+                        imported_models=imported_models, browse=True, map_only=True)
+
+
 def search_page(database, brief="", *, limit=12, offset=0, city="", category="",
-                linked_only=False, imported_models=None, natural_light=False):
+                linked_only=False, imported_models=None, natural_light=False, property_id=None):
     """Browse or search. Continue with next_offset and the same filters."""
     if type(limit) is not int or not 1 <= limit <= PAGE_LIMIT:
         raise ValueError(f"limit must be an integer between 1 and {PAGE_LIMIT}")
     if type(offset) is not int or not 0 <= offset < 2**63 - PAGE_LIMIT:
         raise ValueError("offset must be a nonnegative SQLite integer")
     rows = _search_rows(database, brief, limit + 1, offset, city=city, category=category,
-                        linked_only=linked_only, imported_models=imported_models, browse=True, natural_light=natural_light)
+                        linked_only=linked_only, imported_models=imported_models, browse=True, natural_light=natural_light, property_id=property_id)
     return {"results": rows[:limit], "next_offset": offset + limit if len(rows) > limit else None}
 
 

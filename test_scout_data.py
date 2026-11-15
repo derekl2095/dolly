@@ -6,7 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from catalog import (
-    build, index_property_coordinates, inventory, scan_location, search, search_page,
+    build, index_property_coordinates, inventory, map_locations, scan_location, search, search_page,
     time_zone_for, with_site_coordinates,
 )
 from capture_status import local_status, probe
@@ -48,6 +48,11 @@ class CatalogTests(unittest.TestCase):
             self.assertEqual(search_page(db, imported_models=set())["results"], [])
             filtered = search_page(db, imported_models={"ScanA"})
             self.assertEqual([row["models"] for row in filtered["results"]], [{"ScanA": "Loft"}])
+            mapped = map_locations(db, city="Houston")
+            self.assertEqual({row["property_id"] for row in mapped}, {10, 20, 30})
+            self.assertTrue(all(row["latitude"] is None for row in mapped))
+            self.assertEqual([row["property_id"] for row in map_locations(db, "ceilings", linked_only=True)], [10])
+            self.assertEqual(search_page(db, property_id=30)["results"][0]["property_id"], 30)
 
     def test_scan_location_reads_each_linked_address(self):
         with tempfile.TemporaryDirectory() as directory:

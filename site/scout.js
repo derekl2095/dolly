@@ -1,12 +1,12 @@
-import {maxCurvePoints, readShotExport, roundStroke, tracePath} from "./path.js?v=volume";
-import {deleteProject, parseProjectArchive, projectArchiveMaxBytes, readProjects, writeProject} from "./projects.js?v=volume";
-import {defaultFurnitureHeight, furnitureHeight, loadObstacles, maxActors, outlineMeasurements, roomKey, standIn} from "./room-state.js?v=volume";
+import {maxCurvePoints, readShotExport, roundStroke, tracePath, checkWallClearance} from "./path.js?v=staging-controls";
+import {deleteProject, parseProjectArchive, projectArchiveMaxBytes, readProjects, writeProject} from "./projects.js?v=staging-controls";
+import {defaultFurnitureHeight, furnitureHeight, loadObstacles, maxActors, outlineMeasurements, roomKey, standIn, actorHeight, defaultActorHeight, stagingFingerprint, savedStagingFingerprint} from "./room-state.js?v=furniture-sightlines";
 import {planProjection} from "./plan-projection.js";
 import {capturedSpaceLabel, cleanPropertyDescription, isVoidRoom, listedArea, spaceLabel} from "./location-labels.js?v=dolly";
-import {briefLocationFilters, briefSuggestions, requestsCameraPan, requestsNaturalLight, reviewShotBrief, runAgent} from "./agent.js?v=ranked-rooms";
-import {compareCapturedRooms} from "./compare.js?v=dolly-catalog";
-import {openMesh, closeMesh, currentShot, currentShotCanCheckSightlines, planCurrentShot, applyCurrentShot} from "./mesh.js?v=dolly-planner";
-import {addMapLocations, resetLocationMap} from "./location-map.js?v=location-polish";
+import {briefLocationFilters, briefSuggestions, requestsCameraPan, requestsNaturalLight, reviewShotBrief, runAgent} from "./agent.js?v=furniture-sightlines";
+import {compareCapturedRooms} from "./compare.js?v=furniture-sightlines";
+import {openMesh, closeMesh, currentShot, currentShotCanCheckSightlines, planCurrentShot, applyCurrentShot} from "./mesh.js?v=furniture-sightlines";
+import {loadLocationMap, resetLocationMap} from "./location-map.js?v=all-locations";
 
 const form = document.querySelector("#scout-search");
 const results = document.querySelector("#results");
@@ -207,9 +207,13 @@ let obstacles = [];
 let obstacleKey;
 let marking = false;
 let furniturePointer;
+let furnitureDrag;
 let furnitureCorner;
 const placeMark = document.querySelector("#place-mark");
 const addActor = document.querySelector("#add-actor");
+const actorSizing = document.querySelector("#actor-sizing");
+const actorSelection = document.querySelector("#actor-selection");
+const actorHeightInput = document.querySelector("#actor-height");
 const markButton = document.querySelector("#mark-obstacle");
 const deleteFurniture = document.querySelector("#delete-furniture");
 const instructions = document.querySelector("#plan-instructions");
@@ -361,6 +365,37 @@ function syncActorOptions(actors) {
   addActor.disabled = actors.filter(Boolean).length >= maxActors;
 }
 
+function syncActorSizing(shot) {
+  const placed = shot.actors.flatMap((point, index) => point ? [String(index)] : []);
+  actorSizing.hidden = !placed.length;
+  if ([...actorSelection.options].map(option => option.value).join() !== placed.join()) {
+    const selected = actorSelection.value;
+    actorSelection.replaceChildren(...placed.map(index => new Option(`Actor ${Number(index) + 1}`, index)));
+    if (placed.includes(selected)) actorSelection.value = selected;
+  }
+  if (document.activeElement !== actorHeightInput)
+    actorHeightInput.value = actorHeight(shot.actorHeights, Number(actorSelection.value));
+}
+
+actorSelection.addEventListener("change", () => {
+  if (pose) syncActorSizing(pose);
+});
+actorHeightInput.addEventListener("input", () => {
+  if (actorHeightInput.validity.valid && Number.isFinite(actorHeightInput.valueAsNumber)) {
+    canvas.dispatchEvent(new CustomEvent("actorheight", {
+      detail: {index: Number(actorSelection.value), height: actorHeightInput.valueAsNumber},
+    }));
+  }
+});
+actorHeightInput.addEventListener("change", () => {
+  actorHeightInput.value = actorHeight(pose?.actorHeights, Number(actorSelection.value));
+});
+document.querySelector("#place-actor").addEventListener("click", () => selectPlanMark(actorSelection.value));
+document.querySelector("#remove-actor").addEventListener("click", () => {
+  canvas.dispatchEvent(new CustomEvent("removeactor", {detail: Number(actorSelection.value)}));
+  (actorSizing.hidden ? addActor : actorSelection).focus();
+});
+
 addActor.addEventListener("click", () => {
   if (!pose) return;
   const missing = pose.actors.findIndex(point => !point);
@@ -464,7 +499,7 @@ function draggedPoint(event, drag) {
 
 canvas.addEventListener("pointerdown", event => {
   if (!toWorld || (event.button !== 0 && event.button !== 2)) return;
-  if (planDrag || orbitDrag || stroke || markDrag || furniturePointer != null) return;
+  if (planDrag || orbitDrag || stroke || markDrag || furnitureDrag || furniturePointer != null) return;
   if (panning || event.shiftKey) {
     canvas.setPointerCapture(event.pointerId);
     planDrag = {pointer: event.pointerId, x: event.clientX, y: event.clientY, offset: planOffset};
@@ -492,7 +527,7 @@ canvas.addEventListener("pointerdown", event => {
     for (const handle of shotHandles(pose)) {
       const [px, py] = projectPlan(handle.position, handle.height);
       const actorTop = planIs3D && /^\d+$/.test(handle.mark)
-        ? projectPlan(handle.position, standIn.eyeHeight)[1] : py;
+        ? projectPlan(handle.position, standIn.eyeHeight * actorHeight(pose.actorHeights, Number(handle.mark)) / defaultActorHeight)[1] : py;
       const closestY = Math.max(actorTop, Math.min(py, y));
       const distance = Math.hypot((px - x) * box.width / canvas.width, (closestY - y) * box.height / canvas.height);
       if (distance < closestDistance || (distance === closestDistance && handle.mark === placeMark.value)) {
@@ -505,6 +540,15 @@ canvas.addEventListener("pointerdown", event => {
       markDrag = {...hit, pointer: event.pointerId, origin: toWorld(event, hit.height), point: hit.position};
       return;
     }
+    const furnitureHit = furnitureAt(event);
+    if (furnitureHit) {
+      const {index, height, point} = furnitureHit;
+      canvas.setPointerCapture(event.pointerId);
+      furnitureDrag = {index, height, original: obstacles[index], origin: point, pointer: event.pointerId};
+      syncFurnitureSizing(index);
+      drawPlan?.(pose);
+      return;
+    }
     beginOrbit(event, true);
     return;
   }
@@ -514,6 +558,32 @@ canvas.addEventListener("pointerdown", event => {
 });
 canvas.addEventListener("contextmenu", event => event.preventDefault());
 
+function furnitureAt(event) {
+  for (let index = obstacles.length - 1; index >= 0; index--) {
+    const {min, max} = obstacles[index];
+    const top = planIs3D ? furnitureHeight(obstacles[index]) : 0;
+    for (const height of new Set([top, top / 2, 0])) {
+      const point = toWorld(event, height);
+      if (point.every((value, axis) => value >= min[axis] && value <= max[axis]))
+        return {index, height, point};
+    }
+  }
+  return null;
+}
+
+function updateFurnitureDrag(event) {
+  const {index, height, origin, original} = furnitureDrag;
+  const delta = toWorld(event, height).map((value, axis) => value - origin[axis]);
+  const translate = point => point.map((value, axis) => value + delta[axis]);
+  const min = translate(original.min), max = translate(original.max);
+  const corners = [min, [max[0], min[1]], max, [min[0], max[1]]];
+  if (selectedRoom?.outline && corners.some((corner, i) =>
+    checkWallClearance(selectedRoom.outline, corner, corners[(i + 1) % 4], 0) < -.025)) return;
+  obstacles[index] = {...original, min, max};
+  canvas.dispatchEvent(new CustomEvent("previewfurniture", {detail: {index, min, max}}));
+  drawPlan?.(pose);
+}
+
 function beginOrbit(event, placeOnClick) {
   canvas.setPointerCapture(event.pointerId);
   orbitDrag = {pointer: event.pointerId, x: event.clientX, y: event.clientY,
@@ -521,6 +591,10 @@ function beginOrbit(event, placeOnClick) {
 }
 
 canvas.addEventListener("pointermove", event => {
+  if (furnitureDrag?.pointer === event.pointerId) {
+    updateFurnitureDrag(event);
+    return;
+  }
   if (planDrag?.pointer === event.pointerId) {
     const box = canvas.getBoundingClientRect();
     planOffset = [planDrag.offset[0] + (event.clientX - planDrag.x) * canvas.width / box.width,
@@ -562,6 +636,12 @@ canvas.addEventListener("pointermove", event => {
   drawPlan?.(pose);
 });
 canvas.addEventListener("pointerup", event => {
+  if (furnitureDrag?.pointer === event.pointerId) {
+    updateFurnitureDrag(event);
+    furnitureDrag = undefined;
+    publishObstacles();
+    return;
+  }
   if (planDrag?.pointer === event.pointerId) {
     planDrag = undefined;
     return;
@@ -616,6 +696,12 @@ canvas.addEventListener("pointerup", event => {
   }
 });
 canvas.addEventListener("pointercancel", event => {
+  if (furnitureDrag?.pointer === event.pointerId) {
+    obstacles[furnitureDrag.index] = furnitureDrag.original;
+    furnitureDrag = undefined;
+    publishObstacles();
+    return;
+  }
   if (planDrag?.pointer === event.pointerId) planDrag = undefined;
   if (orbitDrag?.pointer === event.pointerId) orbitDrag = undefined;
   if (markDrag?.pointer === event.pointerId) {
@@ -631,6 +717,7 @@ document.querySelector("#viewport").addEventListener("shotpose", event => {
   }
   addActor.disabled = event.detail.actors.filter(Boolean).length >= maxActors;
   pose = event.detail;
+  syncActorSizing(pose);
   const width = `${(2 * pose.rigRadius).toFixed(2)} m rig width · drawn to scale`;
   if (rigWidth.textContent !== width) rigWidth.textContent = width;
   rigWidth.hidden = false;
@@ -829,7 +916,8 @@ async function inspectRoom(row, model, roomId, proposedShot, autoGeometry = true
   canvas.hidden = capture.hidden = rigWidth.hidden = planViewTools.hidden =
     planZoomTools.hidden = furnitureTools.hidden = instructions.hidden = true;
   resetPlanView();
-  drawPlan = toWorld = projectPlan = pose = undefined;
+  drawPlan = toWorld = projectPlan = pose = furnitureDrag = undefined;
+  actorSizing.hidden = true;
   markDrag = undefined;
   tools.hidden = true;
   drawCurve.disabled = centerAim.disabled = addActor.disabled = true;
@@ -1107,6 +1195,7 @@ function renderRoom(room) {
         const [x, y] = view.project(point, handle.height);
         const selected = handle.mark === placeMark.value;
         const actor = /^\d+$/.test(handle.mark);
+        const heightScale = actor ? actorHeight(pose.actorHeights, Number(handle.mark)) / defaultActorHeight : 1;
         if (planIs3D && actor) {
           context.save();
           const color = standIn.colors[Number(handle.mark) % standIn.colors.length];
@@ -1114,11 +1203,11 @@ function renderRoom(room) {
           context.lineWidth = 2 * standIn.bodyRadius * scale;
           context.lineCap = "round";
           context.beginPath();
-          context.moveTo(...view.project(point, standIn.bodyCenter - standIn.bodyLength / 2));
-          context.lineTo(...view.project(point, standIn.bodyCenter + standIn.bodyLength / 2));
+          context.moveTo(...view.project(point, (standIn.bodyCenter - standIn.bodyLength / 2) * heightScale));
+          context.lineTo(...view.project(point, (standIn.bodyCenter + standIn.bodyLength / 2) * heightScale));
           context.stroke();
           context.beginPath();
-          context.arc(...view.project(point, standIn.eyeHeight), standIn.headRadius * scale, 0, 2 * Math.PI);
+          context.arc(...view.project(point, standIn.eyeHeight * heightScale), standIn.headRadius * scale, 0, 2 * Math.PI);
           context.fill();
           context.restore();
         }
@@ -1127,7 +1216,7 @@ function renderRoom(room) {
         context.font = "bold 15px system-ui";
         const labelRight = handle.mark !== "start";
         context.textAlign = labelRight ? "left" : "right";
-        const labelY = planIs3D && actor ? view.project(point, standIn.eyeHeight)[1] : y;
+        const labelY = planIs3D && actor ? view.project(point, standIn.eyeHeight * heightScale)[1] : y;
         context.fillText(handle.label, x + (labelRight ? 10 : -10), labelY - 9);
         if (handle.mark === "aim") context.strokeRect(x - 6, y - 6, 12, 12);
         else {
@@ -1146,6 +1235,26 @@ function renderRoom(room) {
     " m² outline area (" + Math.round(area * 10.7639104).toLocaleString() + " sq ft)";
   roomGeometry.hidden = false;
   roomStatus.textContent = "";
+}
+
+function resultCard(property) {
+  return [...results.children].find(item => item.dataset.propertyId === String(property));
+}
+
+async function openMapProperty(property, signal) {
+  let item = resultCard(property);
+  if (!item) {
+    const response = await fetch("/api/locations?" + new URLSearchParams({property, limit: 1}), {signal});
+    if (!response.ok) throw Error("Could not load property.");
+    const {rows, scanReadiness} = await response.json();
+    if (signal.aborted || !rows.length) return;
+    item = resultCard(property) ?? card(rows[0], scanReadiness);
+    if (!item.isConnected) results.prepend(item);
+  }
+  results.querySelector(".map-selected")?.classList.remove("map-selected");
+  item.classList.add("map-selected");
+  item.focus();
+  item.scrollIntoView({block: "nearest"});
 }
 
 const moreLocations = document.querySelector("#more-locations");
@@ -1176,14 +1285,14 @@ async function loadLocationPage(filters) {
     if (request.signal.aborted) return;
     if (!response.ok) throw new Error(data.error || "Search API failed");
     const {rows, mode, scanReadiness, next_offset: offset} = data;
-    const cards = rows.map(row => card(row, scanReadiness));
+    const cards = rows.filter(row => !resultCard(row.property_id)).map(row => card(row, scanReadiness));
     results.append(...cards);
     if (!activeLocation && activeScan) {
       const matches = rows.filter(row => Object.hasOwn(row.models, activeScan));
       if (matches.length === 1) showLocation(propertyLabel(matches[0]));
     }
     updateActiveProperty();
-    void addMapLocations(rows, cards);
+
     nextLocationPage = undefined;
     if (Number.isSafeInteger(offset) && offset > Number(filters.get("offset") ?? 0)) {
       nextLocationPage = new URLSearchParams(filters);
@@ -1214,6 +1323,7 @@ form.addEventListener("submit", event => {
   resetLocationSearch(filters.get("city"));
   if (browsing) workspace.dataset.browse = "";
   void loadLocationPage(filters);
+  void loadLocationMap(filters, openMapProperty);
 });
 document.querySelector("#location-map-city").addEventListener("change", event => {
   form.elements.city.value = event.target.value;
@@ -1434,7 +1544,8 @@ async function restoreSelection(selection) {
   roomPicker.hidden = canvas.hidden = capture.hidden = tools.hidden = rigWidth.hidden =
     planViewTools.hidden = planZoomTools.hidden = furnitureTools.hidden = instructions.hidden = true;
   setSidebarVisible(true);
-  drawPlan = toWorld = projectPlan = pose = undefined;
+  drawPlan = toWorld = projectPlan = pose = furnitureDrag = undefined;
+  actorSizing.hidden = true;
   markDrag = undefined;
   setDrawing(false);
   document.querySelector("#room-title").textContent = "Room plan";
@@ -1446,6 +1557,13 @@ async function restoreSelection(selection) {
 }
 
 async function openCheckedProposal(room, setup, requireCapture = false) {
+  const liveShot = selectedRoom && roomKey(selectedRoom) === roomKey(room) ? currentShot() : null;
+  const staging = liveShot
+    ? stagingFingerprint(liveShot.actors, liveShot.actorHeights, liveShot.obstacles)
+    : savedStagingFingerprint(room);
+  if (setup.testedStaging && setup.testedStaging !== staging) {
+    throw Error("Actor or furniture staging changed since this shot was tested. Find shots again to use your current staging.");
+  }
   const previous = selectionSnapshot();
   const opening = inspectRoom({name: room.label || room.modelId}, room.modelId, room.roomId, {...setup, showStandIns: true});
   const request = roomRequest;
@@ -2194,5 +2312,6 @@ async function restoreWorkspace() {
   if (savedProject) setProjectLink(null);
   if (requestedModel) await inspectRoom({name: restore.get("name") || "Room plan"},
     requestedModel, restore.get("room"));
+  else form.requestSubmit();
 }
 void restoreWorkspace();

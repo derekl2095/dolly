@@ -1,7 +1,7 @@
-import {mountDaylight} from "./daylight.js?v=matterport-heading";
-import {alignMesh, sightlineCheck} from "./sightlines.js?v=dolly-daylight";
-import {actorCenter, actorMarks, checkCameraHeight, furnitureHeight, loadShot, maxActors, roomKey, shotSettings, standIn} from "./room-state.js?v=volume";
-import {cameraMoveAxis, checkFraming, checkRigClearance, easedPathFraction, editorShotState, findSlide, interpretDirection, pathFromEndpoints, slideEndpoints, timeFractionAtPath, tracePath} from "./path.js?v=volume";
+import {mountDaylight} from "./daylight.js?v=staging-controls";
+import {alignMesh, furnitureSightlineCheck, sightlineCheck} from "./sightlines.js?v=furniture-sightlines";
+import {actorCenter, actorHeight, defaultActorHeight, actorMarks, checkCameraHeight, furnitureHeight, loadShot, maxActors, roomKey, shotSettings, standIn} from "./room-state.js?v=staging-controls";
+import {cameraMoveAxis, checkFraming, checkRigClearance, easedPathFraction, editorShotState, findSlide, interpretDirection, pathFromEndpoints, slideEndpoints, timeFractionAtPath, tracePath} from "./path.js?v=staging-controls";
 
 const viewport = document.querySelector("#viewport");
 const status = document.querySelector("#render-status");
@@ -210,6 +210,7 @@ function mount(THREE, room, mesh, textures, release, captured = false) {
   let curve = saved.moveKind === "curve"
     ? tracePath(room.proposedShot ? room.proposedShot.pathPoints : saved.pathPoints) : null;
   const actors = actorMarks(room, saved);
+  const actorHeights = actors.map((_, index) => actorHeight(saved.actorHeights ?? room.actorHeights, index));
   const marks = new THREE.Group();
   const furniture = new THREE.Group();
   const furnitureMaterial = new THREE.MeshStandardMaterial({
@@ -256,6 +257,7 @@ function mount(THREE, room, mesh, textures, release, captured = false) {
       }
       const figure = marks.children[index];
       figure.visible = Boolean(point);
+      figure.scale.y = actorHeight(actorHeights, index) / defaultActorHeight;
       if (point) [figure.position.x, figure.position.z] = point;
     });
     marks.children.slice(actors.length).forEach(child => { child.visible = false; });
@@ -305,7 +307,7 @@ function mount(THREE, room, mesh, textures, release, captured = false) {
   function save() {
     try {
       localStorage.setItem(key, JSON.stringify({
-        mark: [cx, cz], ...settings(), aimHeight, lens: Number(lens.value), travel: curve?.travel ?? Number(travel.value), keepMark: keepMark.checked, moveKind: moveKind.value, axis: fixedMoveAxis, pathPoints: curve?.points, requireSightlines: requireSavedSightlines, showStandIns: showMarks.checked, actors, aimLocked, aim: [tx, tz],
+        mark: [cx, cz], ...settings(), aimHeight, lens: Number(lens.value), travel: curve?.travel ?? Number(travel.value), keepMark: keepMark.checked, moveKind: moveKind.value, axis: fixedMoveAxis, pathPoints: curve?.points, requireSightlines: requireSavedSightlines, showStandIns: showMarks.checked, actors, actorHeights, aimLocked, aim: [tx, tz],
       }));
     } catch {}
   }
@@ -356,7 +358,7 @@ function mount(THREE, room, mesh, textures, release, captured = false) {
   function meshObstruction(from, to, cameraHeight = settings().cameraHeight, activeCurve) {
     if (!captured) return null;
     if (rayHeight !== cameraHeight) {
-      raycast = sightlineCheck(THREE, mesh, actors, cameraHeight);
+      raycast = sightlineCheck(THREE, mesh, actors, cameraHeight, actorHeights);
       rayHeight = cameraHeight;
     }
     return raycast(from, to, activeCurve?.at);
@@ -389,9 +391,9 @@ function mount(THREE, room, mesh, textures, release, captured = false) {
     if (!hasCast()) return null;
     const frameSettings = {
       focal, width: settings().sensorWidthMm, aspect: camera.aspect,
-      cameraHeight, aimHeight,
+      cameraHeight, aimHeight, actorHeights,
     };
-    const cast = actors.filter(Boolean);
+    const cast = actors;
     if (!activeCurve) return checkFraming(from, to, [tx, tz], cast, frameSettings);
     let worst = {margin: Infinity, limitingProgress: 0};
     for (const segment of activeCurve.segments) {
@@ -417,18 +419,23 @@ function mount(THREE, room, mesh, textures, release, captured = false) {
     clearTimeout(sightlineTimer);
     blockedView = null;
     sightlineActions.hidden = true;
-    if (!aligned || !hasCast()) {
+    if ((!aligned && !obstacles.length) || !hasCast()) {
       sightline.textContent = "";
       return;
     }
     sightline.textContent = "Checking actor visibility…";
     sightlineTimer = setTimeout(() => {
-      const hit = meshObstruction(from, to, settings().cameraHeight, curve);
+      const furnitureHit = furnitureSightlineCheck(actors, settings().cameraHeight, actorHeights, obstacles)(from, to, curve?.at);
+      const scanHit = aligned ? meshObstruction(from, to, settings().cameraHeight, curve) : null;
+      const hit = !scanHit || (furnitureHit && furnitureHit.t <= scanHit.t) ? furnitureHit : scanHit;
       blockedView = hit;
       sightlineActions.hidden = !hit;
       sightline.textContent = hit
-        ? "The captured scan blocks the view of actor " + hit.actor + " near " + Math.round(hit.t * 100) + "% of the move."
-        : "Actors are visible in the captured scan at all five checked positions.";
+        ? (hit.source === "furniture" ? "Marked furniture" : "The captured scan") + " blocks the view of actor " +
+          hit.actor + " near " + Math.round(hit.t * 100) + "% of the move."
+        : aligned ? (obstacles.length ? "Scan and marked furniture are clear at all five checked positions."
+          : "Actors are visible in the captured scan at all five checked positions.")
+          : "Marked furniture is clear at the sampled positions. Captured sightlines are unverified.";
     }, 140);
   }
 
@@ -463,7 +470,7 @@ function mount(THREE, room, mesh, textures, release, captured = false) {
       document.querySelector("#clearance").dataset.result = margin >= 0 ? "pass" : "fail";
     }
     viewport.dispatchEvent(new CustomEvent("shotpose", {
-      detail: {from, to, x, z, center: [cx, cz], tx, tz, actors, aimHeight,
+      detail: {from, to, x, z, center: [cx, cz], tx, tz, actors, actorHeights, aimHeight,
         cameraHeight: settings().cameraHeight, rigRadius: settings().rigRadius, pathPoints: curve?.points},
     }));
     camera.fov = THREE.MathUtils.radToDeg(2 * Math.atan((settings().sensorWidthMm / camera.aspect) / (2 * focal)));
@@ -513,7 +520,7 @@ function mount(THREE, room, mesh, textures, release, captured = false) {
   }
 
   const refreshDaylight = captured ? mountDaylight({THREE, room, mesh, scene, renderer, fill, marks, isAligned: () => aligned, canvas: renderer.domElement,
-    camera: () => reviewing ? overhead : camera, signal: controls.signal, actors: () => actors, render,
+    camera: () => reviewing ? overhead : camera, signal: controls.signal, actors: () => actors, actorHeights: () => actorHeights, render,
     showFloorPatch: triangles => plan.dispatchEvent(new CustomEvent("sunpatch", {detail: triangles}))}) : null;
   const options = {signal: controls.signal};
   function showAlignmentReview(enabled) {
@@ -598,6 +605,15 @@ function mount(THREE, room, mesh, textures, release, captured = false) {
     }
     checkedTravel = undefined;
     revision.textContent = "";
+    render();
+  }, options);
+  plan.addEventListener("previewfurniture", event => {
+    const {index, min, max} = event.detail;
+    const object = furniture.children[index];
+    if (!object) return;
+    stop();
+    object.position.x = (min[0] + max[0]) / 2;
+    object.position.z = (min[1] + max[1]) / 2;
     render();
   }, options);
   plan.dispatchEvent(new Event("shotmounted"));
@@ -716,6 +732,33 @@ function mount(THREE, room, mesh, textures, release, captured = false) {
     applySetup({...path, lens: Number(lens.value)});
     revision.textContent = "Camera " + which + " updated. See framing and clearance above.";
   }, options);
+  plan.addEventListener("actorheight", event => {
+    const {index, height} = event.detail;
+    if (!actors[index] || !Number.isFinite(height) || height < .5 || height > 3) return;
+    stop();
+    actorHeights[index] = height;
+    showMarks.checked = true;
+    updateStandIns();
+    checkedTravel = undefined;
+    save();
+    render();
+    void refreshDaylight?.evaluate();
+  }, options);
+  plan.addEventListener("removeactor", event => {
+    const index = event.detail;
+    if (!actors[index]) return;
+    stop();
+    actors[index] = null;
+    actorHeights[index] = defaultActorHeight;
+    const center = actorCenter(actors);
+    if (!aimLocked && center) [tx, tz] = center;
+    if (moveKind.value !== "custom") fixedMoveAxis = undefined;
+    updateStandIns();
+    checkedTravel = undefined;
+    save();
+    render();
+    void refreshDaylight?.evaluate();
+  }, options);
   plan.addEventListener("chooseactor", event => {
     const {index, point} = event.detail;
     if (!Number.isInteger(index) || index < 0 || index >= maxActors || index > actors.length) return;
@@ -756,6 +799,7 @@ function mount(THREE, room, mesh, textures, release, captured = false) {
     if (objective === "tighter" && (!baseline || !Number.isFinite(baseline.margin))) {
       return {reason: "A tighter two-shot needs valid actor marks and a baseline frame."};
     }
+    const furnitureSightline = furnitureSightlineCheck(actors, cameraHeight, actorHeights, obstacles);
     let raysChecked = 0;
     let reachedSampleLimit = false;
     const result = findSlide(room.outline, [cx, cz], [tx, tz], moveAxis(), moveKind.value === "static" ? 0 : distance,
@@ -763,6 +807,7 @@ function mount(THREE, room, mesh, textures, release, captured = false) {
         const frame = framing(from, to, focal, cameraHeight);
         if (frame && frame.margin < 0) return false;
         if (objective === "tighter" && frame.margin > baseline.margin - .03) return false;
+        if (furnitureSightline(from, to)) return false;
         if (!checkMesh) return true;
         if (raysChecked >= 16) {
           reachedSampleLimit = true;
@@ -784,7 +829,7 @@ function mount(THREE, room, mesh, textures, release, captured = false) {
       setup: {cameraHeight, aimHeight, mark: result.mark, travel: result.length, lens: focal,
         sensorWidthMm: settings().sensorWidthMm, rigRadius: settings().rigRadius,
         moveKind: moveKind.value, axis, aim: [tx, tz],
-        actors: actors.map(point => point?.slice() ?? null), requireSightlines: checkMesh},
+        actors: actors.map(point => point?.slice() ?? null), actorHeights: actorHeights.slice(), requireSightlines: checkMesh},
       ceiling, clearanceMargin: result.margin, framingMargin: verifiedFrame?.margin, sightlinesSampled: raysChecked > 0,
       reason: "Checked " + result.checked + " setups. " +
         (shift ? "Shifted the camera mark " + shift.toFixed(2) + " m. " : "") +
@@ -813,6 +858,8 @@ function mount(THREE, room, mesh, textures, release, captured = false) {
     }
     if (Array.isArray(setup.actors)) {
       actors.splice(0, actors.length, ...actorMarks(room, setup));
+      if (setup.actorHeights) actorHeights.splice(0, actorHeights.length,
+        ...actors.map((_, index) => actorHeight(setup.actorHeights, index)));
       updateStandIns();
     }
     if (setup.showStandIns === true && hasCast()) showMarks.checked = true;
@@ -889,7 +936,7 @@ function mount(THREE, room, mesh, textures, release, captured = false) {
     const shot = {
       schemaVersion: 1, interpolation: "smoothstep", aimLocked,
       keepMark: keepMark.checked, requireSightlines: requireSavedSightlines,
-      modelId: room.modelId, roomId: room.roomId || null, units: "meters", actors, start, end, pathPoints: curve?.points, aim: [tx, tz],
+      modelId: room.modelId, roomId: room.roomId || null, units: "meters", actors, actorHeights, start, end, pathPoints: curve?.points, aim: [tx, tz],
       cameraHeight: settings().cameraHeight, aimHeight,
       sensorWidthMm: settings().sensorWidthMm, focalLengthMm: Number(lens.value), aspect: [16, 9],
       durationSeconds, moveKind: moveKind.value, rigRadius: settings().rigRadius, clearanceCheck: margin >= 0 ? "pass" : "fail",
@@ -972,7 +1019,7 @@ function mount(THREE, room, mesh, textures, release, captured = false) {
 
   return {plan: planShot, apply: applySetup, canCheckSightlines: () => aligned && hasCast(), snapshot() {
     return {mark: [cx, cz], ...settings(), aimHeight, lens: Number(lens.value), travel: curve?.travel ?? Number(travel.value),
-      moveKind: moveKind.value, axis: fixedMoveAxis, pathPoints: curve?.points, keepMark: keepMark.checked, requireSightlines: requireSavedSightlines, showStandIns: showMarks.checked, obstacles, actors: actors.map(point => point?.slice() ?? null), aimLocked, aim: [tx, tz]};
+      moveKind: moveKind.value, axis: fixedMoveAxis, pathPoints: curve?.points, keepMark: keepMark.checked, requireSightlines: requireSavedSightlines, showStandIns: showMarks.checked, obstacles, actorHeights: actors.map((_, index) => actorHeight(actorHeights, index)), actors: actors.map(point => point?.slice() ?? null), aimLocked, aim: [tx, tz]};
   }, dispose() {
     stop();
     controls.abort();

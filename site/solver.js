@@ -1,4 +1,6 @@
-import {cameraMoveAxis, checkFraming, checkRigClearance, editorShotState, findSlide} from "./path.js?v=spatial-plan";
+import {furnitureSightlineCheck} from "./sightlines.js?v=furniture-sightlines";
+import {actorHeight} from "./room-state.js";
+import {cameraMoveAxis, checkFraming, checkRigClearance, editorShotState, findSlide} from "./path.js?v=staging-controls";
 import {actorCenter, checkCameraHeight, maxActors} from "./room-state.js?v=spatial-plan";
 
 const MOVES = new Set(["slide", "push", "pull", "static"]);
@@ -25,7 +27,7 @@ function moveLabel(moveKind, travel) {
 }
 
 function evidenceSentence(obstacles, sightlineChecks, ceiling) {
-  return (obstacles.length ? ", checked against " + obstacles.length + " marked furniture footprints." : ".") +
+  return (obstacles.length ? ", checked against " + obstacles.length + " marked furniture footprints and sampled visibility against those boxes." : ".") +
     (sightlineChecks ? " Clear at five sampled eye-level scan positions." : " Captured sightlines unverified.") +
     (ceiling.status === "unknown" ? " Room height unverified." : "");
 }
@@ -69,7 +71,8 @@ export function solveShot(room, constraints = {}) {
     return result("missing-evidence", {label: "Missing evidence: room outline",
       reason: "Room outline is missing.", missing: ["room outline"]});
 
-  const actors = framingActors(constraints.actors ?? room.actors);
+  const inputActors = constraints.actors ?? room.actors;
+  const actors = framingActors(inputActors);
   const mark = finitePair(constraints.mark ?? room.camera);
   if (!actors || !mark)
     return result("missing-evidence", {label: "Missing evidence: actor marks",
@@ -98,10 +101,14 @@ export function solveShot(room, constraints = {}) {
   const obstacles = Array.isArray(constraints.obstacles) ? constraints.obstacles : [];
   const keepMark = constraints.keepMark === true;
   const axis = cameraMoveAxis(move, mark, aim, constraints.slideAxis ?? room.slideAxis);
-  const optical = {focal: lens, width: sensorWidthMm, aspect: 16 / 9, cameraHeight, aimHeight};
+  const heightSource = constraints.actorHeights ?? room.actorHeights;
+  const actorHeights = Array.isArray(heightSource) ? inputActors.flatMap((actor, index) =>
+    actor ? [actorHeight(heightSource, index)] : []) : undefined;
+  const optical = {actorHeights, focal: lens, width: sensorWidthMm, aspect: 16 / 9, cameraHeight, aimHeight};
+  const furnitureSightline = furnitureSightlineCheck(actors, cameraHeight, actorHeights, obstacles);
   const sightline = constraints.requireSightlines ? constraints.sightlineCheck : null;
   const sightlineLimit = constraints.sightlineLimit ?? 8;
-  const rejections = {clearance: 0, framing: 0, sightline: 0};
+  const rejections = {clearance: 0, framing: 0, sightline: 0, furniture: 0};
   let passedClearance = 0;
   let sightlineChecks = 0;
   let limited = false;
@@ -109,6 +116,10 @@ export function solveShot(room, constraints = {}) {
     passedClearance++;
     if (checkFraming(from, to, aim, actors, optical).margin < 0) {
       rejections.framing++;
+      return false;
+    }
+    if (furnitureSightline(from, to)) {
+      rejections.furniture++;
       return false;
     }
     if (!sightline) return true;
@@ -124,6 +135,7 @@ export function solveShot(room, constraints = {}) {
   rejections.clearance = found.checked - passedClearance;
   const evaluation = {tested: found.checked, clearanceRejected: rejections.clearance,
     framingRejected: rejections.framing, sightlineRejected: rejections.sightline,
+    furnitureSightlineRejected: rejections.furniture,
     sightlineChecks, sightlineLimitReached: limited};
 
   if (!found.mark) {
@@ -131,7 +143,8 @@ export function solveShot(room, constraints = {}) {
       reason: limited ? "Captured sightline search reached its eight-candidate limit."
         : "No setup passed. Tested " + evaluation.tested + " setups; " +
           evaluation.clearanceRejected + " failed rig clearance, " +
-          evaluation.framingRejected + " failed framing and " +
+          evaluation.framingRejected + " failed framing, " +
+          evaluation.furnitureSightlineRejected + " had furniture blocking an actor and " +
           evaluation.sightlineRejected + " hit a captured obstruction.",
       evaluation, ceiling});
   }
@@ -141,7 +154,8 @@ export function solveShot(room, constraints = {}) {
   const setup = {
     mark: found.mark.slice(), axis: direction.slice(), travel: found.length, moveKind: move,
     lens, sensorWidthMm, cameraHeight, rigRadius, aimHeight, aim: aim.slice(),
-    aimLocked: constraints.aimLocked === true, actors: actors.map(actor => actor.slice()),
+    aimLocked: constraints.aimLocked === true, ...(actorHeights ? {actorHeights: inputActors.map((_, index) => actorHeight(heightSource, index))} : {}),
+    actors: inputActors.map(actor => actor == null ? null : finitePair(actor)),
     obstacles, keepMark, requireSightlines: sightlineChecks > 0,
     durationSeconds: constraints.durationSeconds,
   };
