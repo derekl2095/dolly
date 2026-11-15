@@ -1,5 +1,5 @@
 import {createRelight} from "./relight.js?v=dark-panes";
-import {scanWindowCandidates} from "./window-detection.js?v=mesh-gap15";
+import {scanWindowCandidates} from "./window-detection.js?v=mesh-gap16";
 async function request(path, options) {
   const response = await fetch(path, options);
   const data = await response.json();
@@ -123,6 +123,8 @@ export function mountDaylight({THREE, room, mesh, scene, renderer, fill, marks, 
   panel.hidden = false;
   status.textContent = "";
   panel.querySelector("#daylight-location-source").textContent = "";
+  const headingSource = panel.querySelector("#daylight-heading-source");
+  headingSource.textContent = "";
   form.reset();
   const save = form.querySelector('button[type="submit"]');
   save.disabled = appearance.disabled = show.disabled = clock.disabled = true;
@@ -347,6 +349,42 @@ export function mountDaylight({THREE, room, mesh, scene, renderer, fill, marks, 
     render();
   }
 
+  let headingLookup;
+  function updateHelp() {
+    const missing = [
+      ...(["latitude", "longitude", "timeZone"].some(key => !form.elements[key].value) ? ["site coordinates and time zone"] : []),
+      ...(!form.elements.heading.value ? ["true-north bearing"] : []),
+      ...(!saved.profile?.windows?.length ? ["a confirmed exterior window"] : []),
+    ];
+    help.textContent = !saved.revision ? "First use Inspect mesh alignment and save the review." :
+      missing.length ? "To start, add " + missing.join(", ") + ". Then save to show direct sunlight." :
+      "The overlay estimates direct sun over the photographed scan.";
+  }
+  async function fillHeading() {
+    const field = form.elements.heading;
+    if (!saved || !panel.open || field.value !== "" || headingLookup) return;
+    headingSource.textContent = "Checking Matterport for true north…";
+    headingLookup = request("/api/room-heading?" + params, {signal});
+    try {
+      const result = await headingLookup;
+      if (signal.aborted || field.value !== "") return;
+      if (result.status === "ready") {
+        field.value = result.heading;
+        headingSource.textContent = "Filled from " + result.source + ".";
+        updateHelp();
+      } else {
+        headingSource.textContent = result.reason + " Enter a verified bearing to continue.";
+      }
+    } catch (error) {
+      if (!signal.aborted && field.value === "") headingSource.textContent = error.message;
+    }
+  }
+  panel.addEventListener("toggle", fillHeading, listen);
+  form.elements.heading.addEventListener("input", () => {
+    headingSource.textContent = "";
+    if (saved) updateHelp();
+  }, listen);
+
   async function load() {
     const loaded = await request("/api/room-lighting?" + params, {signal});
     if (signal.aborted) return;
@@ -380,14 +418,8 @@ export function mountDaylight({THREE, room, mesh, scene, renderer, fill, marks, 
     ready = saved.status === "ready";
     save.disabled = detect.disabled = pick.disabled = !saved.revision;
     appearance.disabled = show.disabled = clock.disabled = !ready;
-    const missing = [
-      ...(["latitude", "longitude", "timeZone"].some(key => !form.elements[key].value) ? ["site coordinates and time zone"] : []),
-      ...(!form.elements.heading.value ? ["true-north bearing"] : []),
-      ...(!saved.profile?.windows?.length ? ["a confirmed exterior window"] : []),
-    ];
-    help.textContent = !saved.revision ? "First use Inspect mesh alignment and save the review." :
-      missing.length ? "To start, add " + missing.join(", ") + ". Then save to show direct sunlight." :
-      "The overlay estimates direct sun over the photographed scan.";
+    updateHelp();
+    void fillHeading();
     if (ready) show.checked = true;
     status.textContent = saved.status === "ready" ? "Daylight calibration ready."
       : saved.status === "stale" ? "Review and resave the daylight calibration for this mesh."

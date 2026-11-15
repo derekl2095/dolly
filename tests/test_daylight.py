@@ -4,9 +4,11 @@ import unittest
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import daylight
 from app import Handler
+from import_room import model_heading
 
 
 WINDOW = {"id": "east", "corners": [[3, 1, -1], [3, 2, -1], [3, 2, 1], [3, 1, 1]],
@@ -101,3 +103,34 @@ class DaylightTest(unittest.TestCase):
         matched = openings_on_outline([elsewhere, {"boundary": {"edges": [edge]}}], outline, 2)
         self.assertEqual(len(matched), 1)
         self.assertEqual(matched[0]["source"], "Matterport opening test")
+
+
+class MatterportHeadingTest(unittest.TestCase):
+    @staticmethod
+    def coordinates(lat, lon):
+        return {"data": {"model": {"geocoordinates": {
+            "origin": {"lat": "0", "long": "0"}, "plusZ": {"lat": lat, "long": lon},
+        }}}}
+
+    def test_heading_uses_directed_axis_and_rejects_missing_geometry(self):
+        self.assertEqual(model_heading(self.coordinates(".00009", 0)), 0)
+        self.assertEqual(model_heading(self.coordinates(0, ".00009")), 90)
+        self.assertEqual(model_heading(self.coordinates("-.00009", 0)), 180)
+        self.assertEqual(model_heading(self.coordinates(0, "-.00009")), 270)
+        self.assertIsNone(model_heading(self.coordinates(0, 0)))
+        self.assertIsNone(model_heading(self.coordinates(1, 1)))
+        self.assertIsNone(model_heading({"data": {"model": {"geocoordinates": None}}}))
+
+    @patch("app.matterport_configured", return_value=True)
+    @patch("app.read_model")
+    def test_heading_route_caches_zero_and_skips_measured_outlines(self, read_model, _configured):
+        handler = object.__new__(Handler)
+        room = {"roomId": "office", "geometrySource": "Matterport room boundary"}
+        handler.server = SimpleNamespace(room=lambda model, room_id: room, model_headings={})
+        handler.respond = lambda status, payload: (status, payload)
+        read_model.return_value = self.coordinates(".00009", 0)
+        for _ in range(2):
+            self.assertEqual(handler.room_heading("Scan", "office")[1]["heading"], 0)
+        read_model.assert_called_once()
+        room["geometrySource"] = "Operator-measured boundary: fixture"
+        self.assertEqual(handler.room_heading("Scan", "office")[1]["status"], "unknown")

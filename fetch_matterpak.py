@@ -2,6 +2,7 @@
 import argparse
 import base64
 import getpass
+import io
 import json
 import os
 from pathlib import Path, PurePosixPath
@@ -13,7 +14,12 @@ from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 import zipfile
 
-MAX_ARCHIVE_BYTES = 250 * 1024**2
+MAX_ARCHIVE_BYTES = 1024**3
+MAX_EXPANDED_BYTES = 2 * 1024**3
+
+
+class MatterPakSizeError(ValueError):
+    """The archive or extracted rendering assets exceed a size limit."""
 
 
 class MatterPakUnavailable(ValueError):
@@ -108,8 +114,8 @@ def unpack(archive, destination, *, replace_incomplete=False):
             if relative.is_absolute() or ".." in relative.parts or "\\" in entry.filename:
                 raise ValueError("Unexpected archive path.")
             expanded_size += entry.file_size
-            if expanded_size > 1024**3:
-                raise ValueError("Expanded MatterPak exceeds 1 GB.")
+            if expanded_size > MAX_EXPANDED_BYTES:
+                raise MatterPakSizeError("The MatterPak rendering assets exceed the 2 GiB extraction limit.")
             target = staging.joinpath(*relative.parts)
             target.parent.mkdir(parents=True, exist_ok=True)
             with bundle.open(entry) as source, target.open("xb") as output:
@@ -144,20 +150,100 @@ def unpack(archive, destination, *, replace_incomplete=False):
             raise
 
 
+class RemoteZip(io.RawIOBase):
+    """Read a ZIP using byte ranges so extraction can skip unused files."""
+
+    block_size = 8 * 1024**2
+
+    def __init__(self, url, size, tail_start, tail):
+        super().__init__()
+        self.url = url
+        self.size = size
+        self.position = 0
+        self.tail_start = tail_start
+        self.tail = tail
+        self.block_start = 0
+        self.block = b""
+        self.downloaded = len(tail)
+
+    def readable(self):
+        return True
+
+    def seekable(self):
+        return True
+
+    def tell(self):
+        return self.position
+
+    def seek(self, offset, whence=io.SEEK_SET):
+        base = {io.SEEK_SET: 0, io.SEEK_CUR: self.position, io.SEEK_END: self.size}[whence]
+        if base + offset < 0:
+            raise OSError("Invalid ZIP offset.")
+        self.position = base + offset
+        return self.position
+
+    def readinto(self, buffer):
+        if self.position >= self.size or not buffer:
+            return 0
+        if self.position >= self.tail_start:
+            start, data = self.tail_start, self.tail
+        else:
+            if not self.block_start <= self.position < self.block_start + len(self.block):
+                self.block_start = self.position
+                end = min(self.tail_start, self.position + self.block_size) - 1
+                length = end - self.position + 1
+                if self.downloaded + length > MAX_ARCHIVE_BYTES:
+                    raise MatterPakSizeError("The MatterPak needs more than 1 GiB of download data to render.")
+                request = Request(self.url, headers={"Range": f"bytes={self.position}-{end}"})
+                with urlopen(request, timeout=60) as response:
+                    if (response.status != 206 or
+                            response.headers.get("Content-Range") != f"bytes {self.position}-{end}/{self.size}"):
+                        raise zipfile.BadZipFile("The signed download returned an unexpected byte range.")
+                    self.block = response.read(length + 1)
+                if len(self.block) != length:
+                    raise zipfile.BadZipFile("The signed download returned an incomplete byte range.")
+                self.downloaded += length
+            start, data = self.block_start, self.block
+        offset = self.position - start
+        count = min(len(buffer), len(data) - offset)
+        buffer[:count] = data[offset:offset + count]
+        self.position += count
+        return count
+
+
 def download_mesh(model, destination, key, token, *, replace_incomplete=False):
     url = get_download(model, key.strip(), token.strip())
     if urlsplit(url).scheme != "https":
         raise ValueError("Matterport did not return a secure download URL.")
     destination.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryFile() as archive, urlopen(url, timeout=60) as response:
-        size = 0
-        while chunk := response.read(1024**2):
-            size += len(chunk)
-            if size > MAX_ARCHIVE_BYTES:
-                raise ValueError("MatterPak ZIP exceeds 250 MB.")
-            archive.write(chunk)
-        archive.seek(0)
-        unpack(archive, destination, replace_incomplete=replace_incomplete)
+    tail_size = 128 * 1024
+    request = Request(url, headers={"Range": f"bytes=-{tail_size}"})
+    with urlopen(request, timeout=60) as response:
+        if getattr(response, "status", 200) == 206:
+            match = re.fullmatch(r"bytes (\d+)-(\d+)/(\d+)", response.headers.get("Content-Range", ""))
+            if not match:
+                raise zipfile.BadZipFile("Matterport did not identify the ZIP byte range.")
+            start, end, size = map(int, match.groups())
+            if end != size - 1 or start != max(0, size - tail_size):
+                raise zipfile.BadZipFile("Matterport returned an unexpected ZIP tail range.")
+            tail = response.read(tail_size + 1)
+            if len(tail) != size - start:
+                raise zipfile.BadZipFile("Matterport returned an incomplete ZIP directory.")
+            with io.BufferedReader(RemoteZip(url, size, start, tail)) as archive:
+                unpack(archive, destination, replace_incomplete=replace_incomplete)
+            return
+        content_length = response.headers.get("Content-Length")
+        if content_length and content_length.isdecimal() and int(content_length) > MAX_ARCHIVE_BYTES:
+            raise MatterPakSizeError("The MatterPak ZIP exceeds the 1 GiB download limit.")
+        with tempfile.TemporaryFile() as archive:
+            size = 0
+            while chunk := response.read(1024**2):
+                size += len(chunk)
+                if size > MAX_ARCHIVE_BYTES:
+                    raise MatterPakSizeError("The MatterPak ZIP exceeds the 1 GiB download limit.")
+                archive.write(chunk)
+            archive.seek(0)
+            unpack(archive, destination, replace_incomplete=replace_incomplete)
 
 
 def main():

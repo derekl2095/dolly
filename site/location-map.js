@@ -14,6 +14,19 @@ let total = 0;
 let failed = false;
 let lookup = new AbortController();
 let pending = 0;
+let selectedProperty;
+
+function selectProperty(id, card) {
+  const previous = locations.get(selectedProperty);
+  previous?.card.classList.remove("map-selected");
+  previous?.marker.getElement()?.classList.remove("map-selected");
+  previous?.marker.setZIndexOffset(0);
+  selectedProperty = id;
+  card.classList.add("map-selected");
+  const marker = locations.get(id)?.marker;
+  marker?.getElement()?.classList.add("map-selected");
+  marker?.setZIndexOffset(500);
+}
 
 function loadLibrary() {
   if (loading) return loading;
@@ -61,6 +74,8 @@ function showCity() {
   for (const location of locations.values()) {
     if (!city || location.city === city) location.marker.addTo(pins);
   }
+  const selected = locations.get(selectedProperty);
+  if (selected) selected.marker.getElement()?.classList.add("map-selected");
   updateStatus();
   fit();
 }
@@ -86,6 +101,7 @@ export function resetLocationMap(city = "") {
   total = 0;
   pending = 0;
   failed = false;
+  selectedProperty = undefined;
   locations.clear();
   cityPicker.selectedIndex = Math.max(0, [...cityPicker.options].findIndex(option => cityKey(option.value) === cityKey(city)));
   pins?.clearLayers();
@@ -122,6 +138,7 @@ export async function addMapLocations(rows, cards) {
           button.textContent = "Show property";
           button.addEventListener("click", () => {
             map.closePopup();
+            selectProperty(row.property_id, cards[item]);
             cards[item].focus();
           });
           const source = document.createElement("small");
@@ -131,8 +148,9 @@ export async function addMapLocations(rows, cards) {
             title: label, alt: label,
             icon: L.divIcon({className: "scout-map-pin", iconSize: [16, 16], iconAnchor: [8, 8]}),
           }).bindPopup(popup);
+          marker.on("click", () => selectProperty(row.property_id, cards[item]));
           const city = cityKey(row.city);
-          locations.set(row.property_id, {city, marker});
+          locations.set(row.property_id, {city, marker, card: cards[item]});
           if (!cityPicker.value || cityKey(cityPicker.value) === city) marker.addTo(pins);
         } catch {
           if (!signal.aborted && current === generation) failed = true;
