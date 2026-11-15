@@ -3,9 +3,9 @@ import {deleteProject, parseProjectArchive, projectArchiveMaxBytes, readProjects
 import {defaultFurnitureHeight, furnitureHeight, loadObstacles, maxActors, outlineMeasurements, roomKey, standIn, actorHeight, defaultActorHeight, stagingFingerprint, savedStagingFingerprint} from "./room-state.js?v=furniture-sightlines";
 import {planProjection} from "./plan-projection.js";
 import {capturedSpaceLabel, cleanPropertyDescription, isVoidRoom, listedArea, spaceLabel} from "./location-labels.js?v=dolly";
-import {briefLocationFilters, briefSuggestions, requestsCameraPan, requestsNaturalLight, reviewShotBrief, runAgent} from "./agent.js?v=furniture-sightlines";
+import {briefLocationFilters, briefSuggestions, requestsCameraPan, requestsNaturalLight, reviewShotBrief, runAgent} from "./agent.js?v=batch-shot-retries";
 import {compareCapturedRooms} from "./compare.js?v=furniture-sightlines";
-import {openMesh, closeMesh, currentShot, currentShotCanCheckSightlines, planCurrentShot, applyCurrentShot} from "./mesh.js?v=window-frame-review";
+import {openMesh, closeMesh, currentShot, currentShotHasCapture, currentShotCanCheckSightlines, planCurrentShot, applyCurrentShot} from "./mesh.js?v=daylight-panel";
 import {loadLocationMap, resetLocationMap} from "./location-map.js?v=all-locations";
 
 const form = document.querySelector("#scout-search");
@@ -119,7 +119,7 @@ document.querySelector("#retry-mesh").addEventListener("click", async () => {
   if (!selectedRoom || !roomRequest) return;
   closeMesh();
   await openMesh(selectedRoom, roomRequest.signal);
-  if (retryMesh.hidden) importMesh.hidden = true;
+  if (currentShotHasCapture()) importMesh.hidden = uploadMesh.hidden = true;
 });
 const importMesh = document.querySelector("#import-mesh");
 const retryMesh = document.querySelector("#retry-mesh");
@@ -129,6 +129,7 @@ importMesh.addEventListener("click", () => prepareMatterPak(selectedRoom, roomRe
 async function prepareMatterPak(room, request) {
   if (!room || !request) return;
   importMesh.disabled = retryMesh.disabled = true;
+  uploadMesh.hidden = true;
   renderStatus.textContent = "Downloading the selected MatterPak…";
   try {
     const response = await fetch("/api/import-matterpak", {method: "POST",
@@ -151,7 +152,7 @@ async function prepareMatterPak(room, request) {
     if (!request.signal.aborted) renderStatus.textContent = error.message;
   } finally {
     if (!request.signal.aborted) {
-      importMesh.hidden = retryMesh.hidden;
+      importMesh.hidden = uploadMesh.hidden = currentShotHasCapture();
       importMesh.disabled = retryMesh.disabled = false;
     }
   }
@@ -1571,7 +1572,7 @@ async function openCheckedProposal(room, setup, requireCapture = false) {
   if (request !== roomRequest || request.signal.aborted)
     throw Error("The room changed while the proposal was opening. Your selection was kept.");
   const missingSightlines = opened && setup.requireSightlines && !currentShotCanCheckSightlines();
-  const missingCapture = opened && requireCapture && !retryMesh.hidden;
+  const missingCapture = opened && requireCapture && !currentShotHasCapture();
   if (!opened || missingSightlines || missingCapture) {
     await restoreSelection(previous);
     const error = Error(missingSightlines ? "The proposal requires an aligned MatterPak, which the editor could not load."

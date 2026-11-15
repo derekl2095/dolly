@@ -382,16 +382,33 @@ export async function runAgent(brief, {activity, apply, naturalLight = false, lo
     const travel = move === "static" ? 0 : (targetTravel ?? Math.max(minimumTravel, .7));
     const report = await checkCandidate(room, {move, lens, travel, captured: requireSightlines});
     const {framingRejected, sightlineRejected, furnitureSightlineRejected, clearanceRejected} = report.evaluation ?? {};
-    if (report.solverStatus !== "fail" || automaticRetries.has(roomKey) || retried.size >= 6) return report;
-    const adjustment = framingRejected ? "back_up" : sightlineRejected || furnitureSightlineRejected || clearanceRejected ? "shift_right" : null;
-    if (!adjustment) return report;
+    if (!["fail", "fallback"].includes(report.solverStatus) || automaticRetries.has(roomKey) || retried.size >= 6) return report;
+    const obstructed = Boolean(sightlineRejected || furnitureSightlineRejected || clearanceRejected);
+    const backups = [["back_up", .5], ["back_up", .85], ["back_up", 1.2]];
+    const shifts = [["shift_left", .5], ["shift_right", .5], ["shift_left", .85]];
+    const adjustments = framingRejected && obstructed ? [backups[0], ...shifts.slice(0, 2)]
+      : framingRejected ? backups : obstructed ? shifts : [];
+    if (!adjustments.length) return report;
     automaticRetries.add(roomKey);
-    try {
-      return await execute("retry_candidate", {candidate: report.id, adjustment, meters: .5});
-    } catch (error) {
-      activity("Could not retry " + report.id + ": " + error.message);
-      return report;
+    let best = report;
+    for (const [adjustment, meters] of adjustments) {
+      if (retried.size >= 6) break;
+      try {
+        const retry = await execute("retry_candidate", {candidate: report.id, adjustment, meters});
+        const qualification = candidateReports().find(candidate => candidate.id === retry.id);
+        if (qualification?.status === "qualifies") {
+          const issue = report.solverStatus === "fallback" ? "The first setup fell short of minimum travel"
+            : framingRejected ? "The first setup failed framing checks" : "The first setup hit an obstruction or failed clearance";
+          activity(`${issue} in ${room.label || room.modelId}. After ${retry.adjustment}, Dolly verified ${retry.travel.toFixed(2)} m of travel at ${lens} mm.`);
+          return retry;
+        }
+        if ((retry.travel ?? -1) > (best.travel ?? -1)) best = retry;
+      } catch (error) {
+        activity("Could not test the adjustment for " + report.id + ": " + error.message);
+      }
     }
+    return best;
+
   }
 
   async function compareAvailableRoom() {

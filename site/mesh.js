@@ -1,4 +1,4 @@
-import {mountDaylight} from "./daylight.js?v=window-frame-review";
+import {mountDaylight} from "./daylight.js?v=daylight-panel";
 import {alignMesh, furnitureSightlineCheck, sightlineCheck} from "./sightlines.js?v=furniture-sightlines";
 import {actorCenter, actorHeight, defaultActorHeight, actorMarks, checkCameraHeight, furnitureHeight, loadShot, maxActors, roomKey, shotSettings, standIn} from "./room-state.js?v=staging-controls";
 import {cameraMoveAxis, checkFraming, checkRigClearance, easedPathFraction, editorShotState, findSlide, interpretDirection, pathFromEndpoints, slideEndpoints, timeFractionAtPath, tracePath} from "./path.js?v=staging-controls";
@@ -54,6 +54,10 @@ export function currentShot() {
   return active?.snapshot();
 }
 
+export function currentShotHasCapture() {
+  return active?.hasCapture === true;
+}
+
 export function currentShotCanCheckSightlines() {
   return active?.canCheckSightlines() === true;
 }
@@ -77,22 +81,35 @@ export function closeMesh() {
   document.querySelector("#framing").textContent = "";
 }
 
+function mountOutline(THREE, room, time) {
+  const mesh = schematicRoom(THREE, room);
+  return mount(THREE, {...room, matterpakUp: "y", matterpakFloorHeight: 0}, mesh, [], () => {
+    for (const object of mesh.children) object.geometry.dispose();
+    for (const material of new Set(mesh.children.map(object => object.material))) material.dispose();
+  }, false, time);
+}
+
 export async function openMesh(room, signal) {
   retry.hidden = true;
-  status.textContent = "Checking for the captured mesh…";
+  status.textContent = "Opening the room outline…";
+  let THREE;
+  let outline;
   try {
+    THREE = await import("three");
+    if (signal.aborted) return;
+    active = outline = mountOutline(THREE, room);
+    status.textContent = "Scaled room outline · checking for captured mesh…";
     const base = "/matterpak/" + encodeURIComponent(room.modelId) + "/";
     const response = await fetch(base + "manifest.json", {signal});
-    if (response.status === 404) {
-      throw new Error("MatterPak is not imported");
-    }
     if (!response.ok) throw new Error("Mesh manifest unavailable");
     const {obj, mtl} = await response.json();
+    if (signal.aborted || active !== outline) return;
     status.textContent = "Loading captured geometry and photo textures…";
-    const [THREE, {OBJLoader}, {MTLLoader}] = await Promise.all([
-      import("three"), import("three/addons/loaders/OBJLoader.js"),
+    const [{OBJLoader}, {MTLLoader}] = await Promise.all([
+      import("three/addons/loaders/OBJLoader.js"),
       import("three/addons/loaders/MTLLoader.js"),
     ]);
+    if (signal.aborted || active !== outline) return;
     const url = path => base + path.split("/").map(encodeURIComponent).join("/");
     const manager = new THREE.LoadingManager();
     let finish, fail;
@@ -139,39 +156,29 @@ export async function openMesh(room, signal) {
         for (const material of [object.material].flat()) material.dispose();
       });
     };
-    if (signal.aborted) {
+    if (signal.aborted || active !== outline) {
       release();
       return;
     }
+    const currentRoom = {...room, proposedShot: outline.snapshot()};
+    const time = timeline.value;
+    const playing = outline.isPlaying();
+    outline.dispose();
     try {
-      active = mount(THREE, room, mesh, textures, release, true);
+      active = mount(THREE, currentRoom, mesh, textures, release, true, time);
     } catch (error) {
       release();
+      active = outline = mountOutline(THREE, currentRoom, time);
       throw error;
     }
+    if (playing) active.play();
     status.textContent = "Captured MatterPak · photographed lighting";
   } catch (error) {
-    if (!signal.aborted) {
-      try {
-        const THREE = await import("three");
-        if (signal.aborted) return;
-        const mesh = schematicRoom(THREE, room);
-        active = mount(THREE, {...room, matterpakUp: "y", matterpakFloorHeight: 0},
-          mesh, [], () => {
-            for (const object of mesh.children) object.geometry.dispose();
-            for (const material of new Set(mesh.children.map(object => object.material))) material.dispose();
-          });
-        status.textContent = "Scaled room outline · captured mesh unavailable";
-        retry.hidden = false;
-      } catch (fallbackError) {
-        if (!signal.aborted) {
-          status.textContent = "3D unavailable. Use the room plan below.";
-          retry.hidden = false;
-        }
-        console.error(fallbackError);
-      }
-      console.info(error.message);
-    }
+    if (signal.aborted || active !== outline) return;
+    status.textContent = outline ? "Scaled room outline · captured mesh unavailable"
+      : "3D unavailable. Use the room plan below.";
+    retry.hidden = false;
+    console.info(error.message);
   }
 }
 
@@ -195,7 +202,7 @@ function schematicRoom(THREE, room) {
   return group;
 }
 
-function mount(THREE, room, mesh, textures, release, captured = false) {
+function mount(THREE, room, mesh, textures, release, captured = false, initialTime) {
   const renderer = new THREE.WebGLRenderer({antialias: true});
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -370,8 +377,8 @@ function mount(THREE, room, mesh, textures, release, captured = false) {
   viewport.querySelector("canvas")?.remove();
   viewport.prepend(renderer.domElement);
   viewport.hidden = transport.hidden = directionForm.hidden = false;
-  timeline.value = "500";
-  let playFromStart = true;
+  timeline.value = initialTime ?? "500";
+  let playFromStart = initialTime == null;
 
   let fixedMoveAxis = saved?.axis;
 
@@ -1021,7 +1028,7 @@ function mount(THREE, room, mesh, textures, release, captured = false) {
   }, options);
   if (room.proposedShot) save();
 
-  return {plan: planShot, apply: applySetup, canCheckSightlines: () => aligned && hasCast(), snapshot() {
+  return {plan: planShot, apply: applySetup, play, isPlaying: () => Boolean(frame), hasCapture: captured, canCheckSightlines: () => aligned && hasCast(), snapshot() {
     return {mark: [cx, cz], ...settings(), aimHeight, lens: Number(lens.value), travel: curve?.travel ?? Number(travel.value),
       moveKind: moveKind.value, axis: fixedMoveAxis, pathPoints: curve?.points, keepMark: keepMark.checked, requireSightlines: requireSavedSightlines, showStandIns: showMarks.checked, obstacles, actorHeights: actors.map((_, index) => actorHeight(actorHeights, index)), actors: actors.map(point => point?.slice() ?? null), aimLocked, aim: [tx, tz]};
   }, dispose() {

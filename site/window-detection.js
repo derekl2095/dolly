@@ -1159,7 +1159,10 @@ export function scanWindowCandidates(THREE, room, mesh, renderer, photoMaterial 
         if (wallCandidates.length !== beforeView || angle === 0)
           views.set(angle, pixels.slice());
       }
-      if (views.get(0)) wallViews.push({size, frameWidth, frameHeight, pixels: views.get(0)});
+      if (views.get(0)) wallViews.push({
+        size, frameWidth, frameHeight, pixels: views.get(0), y0, elevation, pad, width, reversed: winding < 0,
+        origin: wall.origin.toArray(), axis: wall.axis.toArray(), outward: wall.outward.toArray(),
+      });
       const preview = box => ({size, frameWidth, frameHeight, box, pixels: views.get(box.view ?? 0)});
       const allPanes = mergePaneViews(wallCandidates);
       const openingBox = band => ({x: (band.low + pad) / frameWidth * size, right: (band.high + pad) / frameWidth * size,

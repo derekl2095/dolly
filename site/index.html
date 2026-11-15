@@ -55,7 +55,7 @@ select {max-width:100%} canvas {width:100%;display:block;margin-top:12px;backgro
 #transport input[type="range"] {width:90px;padding:0}
 @media(max-width:700px){.layout{grid-template-columns:1fr}}
 </style>
-<link rel="stylesheet" href="scout-studio.css?v=blind-evidence">
+<link rel="stylesheet" href="scout-studio.css?v=daylight-panel">
 </head>
 <body><main>
 <header class="studio-header">
@@ -335,29 +335,47 @@ select {max-width:100%} canvas {width:100%;display:block;margin-top:12px;backgro
 <button id="retry-mesh" type="button" hidden>Retry captured mesh</button>
 <details id="daylight" hidden>
 <summary>Direct sunlight</summary>
-<p id="daylight-help"></p>
 <form>
-<label>Latitude <input name="latitude" type="number" min="-90" max="90" step="any" required></label>
-<label>Longitude <input name="longitude" type="number" min="-180" max="180" step="any" required></label>
-<label>Time zone <input name="timeZone" placeholder="America/Chicago" required></label>
-<p id="daylight-location-source"></p>
-<label>Compass bearing of the plan’s +Z axis (degrees clockwise from true north) <input name="heading" type="number" min="0" max="360" step="any" required></label>
-<p id="daylight-heading-source" aria-live="polite"></p>
-<label><input type="checkbox" name="pick"> Mark a window by clicking four corners around the pane</label>
-<button type="button" id="detect-windows">Suggest windows</button>
-<ul id="window-candidates"></ul>
-<label><input type="checkbox" name="showWindows"> Show marked windows in gold (detected candidates are cyan)</label>
-<ul id="marked-windows"></ul>
-<label>Window measurements <textarea name="windows" rows="6" required></textarea></label>
-<button type="submit">Save daylight calibration</button>
+<section class="daylight-playback" aria-label="Sunlight preview">
+<div class="daylight-time-row">
+<label for="daylight-time">Local time</label>
+<time id="daylight-time-value">—</time>
+</div>
+<input id="daylight-time" type="range" min="0" max="96" step="1" value="48" aria-describedby="daylight-time-value">
+<div class="daylight-preview-controls">
 <label>Study date <input name="date" type="date" required></label>
 <label>Room appearance <select name="appearance" disabled>
 <option value="photo">Photographed</option>
 <option value="relit">Relit</option>
 </select></label>
 <label><input name="show" type="checkbox"> Show sunlight patch</label>
-<label>Time <input type="range" min="0" max="96" step="1" value="48"></label>
-<p role="status"></p>
+</div>
+<p class="daylight-status" role="status"></p>
+</section>
+<p id="daylight-help"></p>
+<fieldset class="daylight-calibration">
+<legend>Location and heading</legend>
+<div class="daylight-location-fields">
+<label>Latitude <input name="latitude" type="number" min="-90" max="90" step="any" required></label>
+<label>Longitude <input name="longitude" type="number" min="-180" max="180" step="any" required></label>
+<label>Time zone <input name="timeZone" placeholder="America/Chicago" required></label>
+</div>
+<p id="daylight-location-source"></p>
+<label>Compass bearing of the plan’s +Z axis (degrees clockwise from true north) <input name="heading" type="number" min="0" max="360" step="any" required></label>
+<p id="daylight-heading-source" aria-live="polite"></p>
+</fieldset>
+<fieldset class="daylight-calibration">
+<legend>Windows</legend>
+<div class="daylight-window-controls">
+<button type="button" id="detect-windows">Suggest windows</button>
+<label><input type="checkbox" name="pick"> Mark a window by clicking four corners around the pane</label>
+<label><input type="checkbox" name="showWindows"> Show marked windows in gold (detected candidates are cyan)</label>
+</div>
+<ul id="window-candidates"></ul>
+<ul id="marked-windows"></ul>
+<label class="daylight-measurements">Window measurements <textarea name="windows" rows="6" required></textarea></label>
+</fieldset>
+<button class="daylight-save" type="submit">Save daylight calibration</button>
 </form>
 </details>
 <details id="capture" hidden>
@@ -367,4 +385,4 @@ select {max-width:100%} canvas {width:100%;display:block;margin-top:12px;backgro
 </div>
 </main>
 <script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js","three-mesh-bvh":"https://cdn.jsdelivr.net/npm/three-mesh-bvh@0.8.3/build/index.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"}}</script>
-<script type="module" src="scout.js?v=window-frame-review"></script></body></html>
+<script type="module" src="scout.js?v=daylight-panel"></script></body></html>

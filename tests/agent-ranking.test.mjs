@@ -800,6 +800,8 @@ test("ranked scans and sibling rooms preserve the shot brief through an automati
   const retry = evidence.candidates.find(report => report.parent);
   assert.equal(retry.room, "nearest");
   assert.equal(retry.adjustment, "back up 0.5 m");
+  assert.ok(evidence.candidates.some(report => report.room === "nearest" && report.adjustment === "back up 0.85 m"));
+
   assert.equal(retry.lens, 35);
   assert.equal(retry.requested, 1);
   assert.equal(results.options[0].room.modelId, "Remote");
