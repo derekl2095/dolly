@@ -317,7 +317,7 @@ test("a provider failure clears an unapplied proposal and keeps the active shot"
   assert.equal(evidence.recommended, "shot-1");
 });
 
-test("continuing a catalog search preserves hard filters and includes later leads", async () => {
+test("continuing a confirmed-outline search preserves hard filters and includes later leads", async () => {
   let turn = 0;
   let evidence;
   const calls = ["search_locations", "continue_location_search"];
@@ -330,6 +330,8 @@ test("continuing a catalog search preserves hard filters and includes later lead
         const params = new URL(path, "http://localhost").searchParams;
         assert.equal(params.get("city"), "Houston");
         assert.equal(params.get("category"), "office");
+        assert.equal(params.get("confirmed"), "1");
+        assert.equal(params.has("imported"), false);
         assert.equal(params.get("q"), "showroom");
         assert.equal(params.get("limit"), "6");
         const offset = Number(params.get("offset") ?? 0);
@@ -339,7 +341,7 @@ test("continuing a catalog search preserves hard filters and includes later lead
       }
       if (turn === calls.length) return {content: "Found two leads."};
       const name = calls[turn++];
-      return {tool_calls: [{id: name, function: {name, arguments: '{"query":"showroom"}'}}]};
+      return {tool_calls: [{id: name, function: {name, arguments: '{"query":"showroom","confirmedOnly":true}'}}]};
     },
   });
   assert.deepEqual(offsets, [0, 6]);

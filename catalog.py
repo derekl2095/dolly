@@ -128,6 +128,18 @@ def coordinates_indexed(database):
         return connection.execute("SELECT 1 FROM sqlite_master WHERE name = 'property_coordinates'").fetchone() is not None
 
 
+def scan_property(database, model):
+    """Return the catalog property when a scan identifies it unambiguously."""
+    with _connect_readonly(database) as connection:
+        connection.row_factory = sqlite3.Row
+        rows = connection.execute(
+            "SELECT name, street, city, state FROM locations "
+            "WHERE EXISTS (SELECT 1 FROM json_each(locations.models) WHERE key = ?) LIMIT 2",
+            (model,),
+        ).fetchall()
+    return dict(rows[0]) if len(rows) == 1 else None
+
+
 def scan_location(database, model):
     """Return unambiguous site metadata for a catalog-linked Matterport model."""
     zones = {("houston", "TX"): "America/Chicago", ("los angeles", "CA"): "America/Los_Angeles"}

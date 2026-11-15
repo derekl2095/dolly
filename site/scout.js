@@ -1,7 +1,7 @@
 import {maxCurvePoints, readShotExport, roundStroke} from "./path.js?v=5";
-import {parseProjectArchive, projectArchiveMaxBytes, readProjects, writeProject} from "./projects.js?v=5";
+import {deleteProject, parseProjectArchive, projectArchiveMaxBytes, readProjects, writeProject} from "./projects.js?v=11";
 import {loadObstacles, outlineMeasurements, roomKey} from "./room-state.js";
-import {briefSuggestions, runAgent} from "./agent.js?v=agent-capture";
+import {briefSuggestions, runAgent} from "./agent.js?v=confirmed-agent";
 import {compareCapturedRooms} from "./compare.js";
 import {openMesh, closeMesh, currentShot, planCurrentShot, applyCurrentShot} from "./mesh.js?v=window-corner-marking";
 import {addMapLocations, resetLocationMap} from "./location-map.js?v=9";
@@ -10,12 +10,25 @@ const form = document.querySelector("#scout-search");
 const results = document.querySelector("#results");
 const workspace = document.querySelector("#workspace");
 const roomTitle = document.querySelector("#room-title");
+const roomLocation = document.querySelector("#room-location");
+const roomGeometry = document.querySelector("#room-geometry");
+const projectLocation = document.querySelector("#project-location");
 const roomPanel = roomTitle.closest("aside");
 const backToResults = document.querySelector("#back-to-results");
+const toggleScouting = document.querySelector("#toggle-scouting");
+const scouting = document.querySelector("#scouting");
+function setSidebarVisible(visible) {
+  scouting.hidden = !visible;
+  toggleScouting.setAttribute("aria-expanded", String(visible));
+  toggleScouting.textContent = visible ? "Hide sidebar" : "Show sidebar";
+}
+toggleScouting.addEventListener("click", () => setSidebarVisible(scouting.hidden));
 backToResults.addEventListener("click", () => {
+  setSidebarVisible(true);
   workspace.dataset.browse = "";
   form.querySelector("input[name=q]").focus();
 });
+document.querySelector('a[href="#scouting"]').addEventListener("click", () => setSidebarVisible(true));
 document.querySelector('a[href="#room-title"]').addEventListener("click", () => {
   delete workspace.dataset.browse;
 });
@@ -25,6 +38,37 @@ const canvas = document.querySelector("#plan");
 const rigWidth = document.querySelector("#rig-width");
 let roomRequest;
 let selectedRoom;
+let activeLocation = "";
+let activeScan;
+let activePropertyId;
+
+function updateActiveProperty() {
+  for (const card of results.children) {
+    const scans = card.querySelector("select");
+    const containsScan = activeScan && scans && [...scans.options].some(option => option.value === activeScan);
+    const active = activePropertyId ? card.dataset.propertyId === activePropertyId : containsScan;
+    if (active) {
+      card.setAttribute("aria-current", "true");
+      if (containsScan && scans.value !== activeScan) {
+        scans.value = activeScan;
+        scans.dispatchEvent(new Event("change"));
+      }
+    } else card.removeAttribute("aria-current");
+  }
+}
+
+function showLocation(location = "") {
+  activeLocation = location;
+  projectLocation.textContent = location || "No location selected";
+  const prefix = roomTitle.textContent + " · ";
+  roomLocation.textContent = location.startsWith(prefix) ? location.slice(prefix.length) : location;
+  roomLocation.hidden = !location;
+}
+
+function propertyLabel({name, street, city, state}) {
+  const address = [street, city, state].filter(Boolean).join(", ");
+  return [name !== street ? name : "", address].filter(Boolean).join(" · ");
+}
 const roomPicker = document.querySelector("#room-picker");
 const roomOptions = roomPicker.querySelector("select");
 
@@ -124,6 +168,10 @@ let drawing = false;
 let stroke;
 let strokePointer;
 let actorDrag;
+let planDrag;
+let planOffset = [0, 0];
+let planZoom = 1;
+let panning = false;
 let obstacles = [];
 let obstacleKey;
 let marking = false;
@@ -133,6 +181,46 @@ const undoButton = document.querySelector("#undo-obstacle");
 const instructions = document.querySelector("#plan-instructions");
 const tools = document.querySelector("#plan-tools");
 const drawCurve = document.querySelector("#draw-curve");
+const panPlan = document.querySelector("#pan-plan");
+const planViewTools = panPlan.parentElement;
+
+function setPanning(enabled) {
+  panning = enabled;
+  planDrag = undefined;
+  panPlan.setAttribute("aria-pressed", String(enabled));
+  canvas.classList.toggle("panning", enabled);
+  if (enabled) instructions.textContent = "Drag the plan to move the view.";
+}
+
+function resetPlanView() {
+  planOffset = [0, 0];
+  planZoom = 1;
+  drawPlan?.(pose);
+}
+
+function zoomPlan(factor) {
+  const zoom = Math.max(.35, Math.min(3, planZoom * factor));
+  planOffset = planOffset.map(value => value * zoom / planZoom);
+  planZoom = zoom;
+  drawPlan?.(pose);
+}
+
+panPlan.addEventListener("click", () => {
+  const enabled = !panning;
+  setDrawing(false);
+  setPanning(enabled);
+});
+document.querySelector("#zoom-plan-out").addEventListener("click", () => zoomPlan(1 / 1.25));
+document.querySelector("#zoom-plan-in").addEventListener("click", () => zoomPlan(1.25));
+document.querySelector("#reset-plan-view").addEventListener("click", resetPlanView);
+canvas.addEventListener("keydown", event => {
+  const offset = {ArrowLeft: [-30, 0], ArrowRight: [30, 0], ArrowUp: [0, -30], ArrowDown: [0, 30]}[event.key];
+  if (!offset) return;
+  event.preventDefault();
+  planOffset = planOffset.map((value, axis) => value + offset[axis]);
+  drawPlan?.(pose);
+});
+
 function setMarking(enabled) {
   marking = enabled;
   draft = undefined;
@@ -143,6 +231,7 @@ function setMarking(enabled) {
 }
 
 function setDrawing(enabled) {
+  setPanning(false);
   setMarking(false);
   drawing = enabled;
   stroke = undefined;
@@ -169,7 +258,7 @@ markButton.addEventListener("click", () => {
 });
 placeMark.addEventListener("change", () => setDrawing(false));
 document.addEventListener("keydown", event => {
-  if (event.key === "Escape" && drawing) setDrawing(false);
+  if (event.key === "Escape" && (drawing || panning)) setDrawing(false);
 });
 undoButton.addEventListener("click", () => {
   obstacles.pop();
@@ -180,7 +269,14 @@ canvas.addEventListener("shotmounted", () => {
   publishObstacles();
 });
 canvas.addEventListener("pointerdown", event => {
-  if (document.querySelector("#viewport").hidden || !toWorld || event.button !== 0) return;
+  if (!toWorld || event.button !== 0) return;
+  if (panning || event.shiftKey) {
+    if (planDrag || stroke || actorDrag || draft) return;
+    canvas.setPointerCapture(event.pointerId);
+    planDrag = {pointer: event.pointerId, x: event.clientX, y: event.clientY, offset: planOffset};
+    return;
+  }
+  if (document.querySelector("#viewport").hidden) return;
   const point = toWorld(event);
   if (drawing) {
     if (stroke) return;
@@ -214,6 +310,13 @@ canvas.addEventListener("pointerdown", event => {
   draft = [point, point];
 });
 canvas.addEventListener("pointermove", event => {
+  if (planDrag?.pointer === event.pointerId) {
+    const box = canvas.getBoundingClientRect();
+    planOffset = [planDrag.offset[0] + (event.clientX - planDrag.x) * canvas.width / box.width,
+      planDrag.offset[1] + (event.clientY - planDrag.y) * canvas.height / box.height];
+    drawPlan?.(pose);
+    return;
+  }
   if (stroke && event.pointerId === strokePointer) {
     const point = toWorld(event);
     const previous = stroke.at(-1);
@@ -232,6 +335,10 @@ canvas.addEventListener("pointermove", event => {
   drawPlan?.(pose);
 });
 canvas.addEventListener("pointerup", event => {
+  if (planDrag?.pointer === event.pointerId) {
+    planDrag = undefined;
+    return;
+  }
   if (stroke && event.pointerId === strokePointer) {
     const path = roundStroke([...stroke, toWorld(event)]);
     setDrawing(false);
@@ -260,6 +367,7 @@ canvas.addEventListener("pointerup", event => {
   publishObstacles();
 });
 canvas.addEventListener("pointercancel", event => {
+  if (planDrag?.pointer === event.pointerId) planDrag = undefined;
   if (actorDrag?.pointer === event.pointerId) {
     actorDrag = undefined;
     drawPlan?.(pose);
@@ -303,6 +411,7 @@ function renderShortlist() {
 function card(row, readiness = {}) {
   const article = element("article", "");
   article.tabIndex = -1;
+  article.dataset.propertyId = String(row.property_id);
   article.append(element("h3", row.name || row.street),
     element("p", [row.street, row.city, row.state].filter(Boolean).join(", ")));
   if (row.evidence) article.append(element("p", row.evidence));
@@ -314,22 +423,32 @@ function card(row, readiness = {}) {
   const scans = element("select", "");
   scans.setAttribute("aria-label", "Scan for " + (row.name || row.street));
   for (const [index, [id, caption]] of models.entries()) {
-    const scan = readiness[id];
-    let status = "Local status unknown";
-    if (scan) {
-      if (scan.alignedRoomCount) status = scan.alignedRoomCount + " aligned scan room(s)";
-      else if (scan.meshAvailable) status = "Mesh needs alignment review";
-      else if (scan.roomCount) status = "Room outline only";
-      else if (scan.remoteRoomCount) status = scan.remoteRoomCount + " confirmed outlines · import on open";
-      else if (scan.remoteOutlineStatus === "no-floor-edges") status = "Matterport returned no floor edges";
-      else if (["no-room-edges", "no-room-records", "boundary-rejected"].includes(scan.remoteOutlineStatus))
-        status = "No usable room outline";
-      else if (["unavailable", "request-failed"].includes(scan.remoteOutlineStatus))
-        status = "Matterport outline check unavailable";
-      else status = "Room outline unverified";
-    }
-    scans.add(new Option((caption?.trim() || `Scan ${index + 1}`) + " · " + status, id));
+    scans.add(new Option(caption?.trim() || `Scan ${index + 1}`, id));
   }
+  const scanStatus = element("p", "");
+  scanStatus.className = "scan-status";
+  scanStatus.id = `scan-status-${row.property_id}`;
+  scans.setAttribute("aria-describedby", scanStatus.id);
+  const updateScanStatus = () => {
+    const scan = readiness[scans.value];
+    if (scan?.alignedRoomCount) {
+      const count = scan.alignedRoomCount;
+      scanStatus.textContent = count === 1 ? "1 aligned room" : `${count} aligned rooms`;
+    } else {
+      scanStatus.textContent = !scan ? "Scan status unavailable"
+        : scan.meshAvailable ? "Alignment review pending"
+        : scan.roomCount ? "Room outline available"
+        : scan.remoteRoomCount ? `${scan.remoteRoomCount} confirmed outlines · import on open`
+        : scan.remoteOutlineStatus === "no-floor-edges" ? "Matterport returned no floor edges"
+        : ["no-room-edges", "no-room-records", "boundary-rejected"].includes(scan.remoteOutlineStatus)
+          ? "No usable room outline"
+        : ["unavailable", "request-failed"].includes(scan.remoteOutlineStatus)
+          ? "Matterport outline check unavailable"
+        : "Room outline unverified";
+    }
+  };
+  scans.addEventListener("change", updateScanStatus);
+  updateScanStatus();
   const inspect = element("button", "Inspect room");
   inspect.addEventListener("click", () => {
     void inspectRoom(row, scans.value);
@@ -353,7 +472,7 @@ function card(row, readiness = {}) {
   const actions = element("div", "");
   actions.className = "location-actions";
   actions.append(inspect, pin);
-  article.append(scans, actions);
+  article.append(scans, scanStatus, actions);
   return article;
 }
 
@@ -392,6 +511,11 @@ function enableMeasuredImport(row, model, signal) {
 }
 
 async function inspectRoom(row, model, roomId, proposedShot, autoGeometry = true) {
+  const priorLocation = activeScan === model ? activeLocation : "";
+  if (activeScan !== model) activePropertyId = undefined;
+  if (row.property_id != null) activePropertyId = String(row.property_id);
+  activeScan = model;
+  updateActiveProperty();
   delete workspace.dataset.browse;
   roomPanel.hidden = false;
   roomRequest?.abort();
@@ -404,8 +528,18 @@ async function inspectRoom(row, model, roomId, proposedShot, autoGeometry = true
   roomPicker.hidden = true;
   const request = new AbortController();
   roomRequest = request;
-  document.querySelector("#room-title").textContent = row.name || row.street;
-  canvas.hidden = capture.hidden = rigWidth.hidden = true;
+  roomTitle.textContent = row.name || row.street || "Room plan";
+  roomGeometry.hidden = true;
+  showLocation(row.location || (row.city || row.street ? propertyLabel(row) : priorLocation));
+  if (!activeLocation) {
+    fetch("/api/scan-property?" + new URLSearchParams({model}), {signal: request.signal})
+      .then(response => response.ok ? response.json() : null)
+      .then(result => {
+        if (!request.signal.aborted && result?.property) showLocation(propertyLabel(result.property));
+      }).catch(() => {});
+  }
+  canvas.hidden = capture.hidden = rigWidth.hidden = planViewTools.hidden = true;
+  resetPlanView();
   drawPlan = toWorld = pose = undefined;
   tools.hidden = true;
   placeMark.value = "camera";
@@ -475,6 +609,7 @@ async function inspectRoom(row, model, roomId, proposedShot, autoGeometry = true
     obstacles = proposedShot?.obstacles ? structuredClone(proposedShot.obstacles) : loadObstacles(data);
     const roomIndex = choices.findIndex(choice => choice.id === (data.roomId ?? null));
     document.querySelector("#room-title").textContent = names[roomIndex] || roomName(data.label, data.roomId);
+    showLocation(activeLocation);
     renderRoom(data);
     if (data.capturePlan) {
       const image = capture.querySelector("img");
@@ -519,20 +654,23 @@ function renderRoom(room) {
     roomStatus.textContent = "This room export has a degenerate outline.";
     return;
   }
-  const scale = Math.min((canvas.width - 120) / width, (canvas.height - 120) / depth);
+  const fitScale = Math.min((canvas.width - 120) / width, (canvas.height - 120) / depth);
   const context = canvas.getContext("2d");
-  canvas.hidden = false;
+  canvas.hidden = planViewTools.hidden = false;
   toWorld = event => {
+    const scale = fitScale * planZoom;
     const box = canvas.getBoundingClientRect();
     const x = (event.clientX - box.left) / box.width * canvas.width;
     const z = (event.clientY - box.top) / box.height * canvas.height;
-    return [left + (x - (canvas.width - width * scale) / 2) / scale,
-      top + (z - (canvas.height - depth * scale) / 2) / scale];
+    return [left + (x - planOffset[0] - (canvas.width - width * scale) / 2) / scale,
+      top + (z - planOffset[1] - (canvas.height - depth * scale) / 2) / scale];
   };
   drawPlan = pose => {
+    const scale = fitScale * planZoom;
     context.clearRect(0, 0, canvas.width, canvas.height);
     context.save();
-    context.translate((canvas.width - width * scale) / 2, (canvas.height - depth * scale) / 2);
+    context.translate((canvas.width - width * scale) / 2 + planOffset[0],
+      (canvas.height - depth * scale) / 2 + planOffset[1]);
     const coords = ([x, z]) => [(x - left) * scale, (z - top) * scale];
     context.beginPath();
     points.forEach((point, index) => context[index ? "lineTo" : "moveTo"](...coords(point)));
@@ -637,9 +775,11 @@ function renderRoom(room) {
   };
   drawPlan();
   const source = room.geometrySource || "Imported outline";
-  roomStatus.textContent = source + " · " + width.toFixed(2) + " m × " +
+  roomGeometry.textContent = source + " · " + width.toFixed(2) + " m × " +
     depth.toFixed(2) + " m bounds · " + outlineMeasurements(points).area.toFixed(1) +
     " m² outline area";
+  roomGeometry.hidden = false;
+  roomStatus.textContent = "";
 }
 
 const moreLocations = document.querySelector("#more-locations");
@@ -672,6 +812,11 @@ async function loadLocationPage(filters) {
     const {rows, mode, scanReadiness, next_offset: offset} = data;
     const cards = rows.map(row => card(row, scanReadiness));
     results.append(...cards);
+    if (!activeLocation && activeScan) {
+      const matches = rows.filter(row => Object.hasOwn(row.models, activeScan));
+      if (matches.length === 1) showLocation(propertyLabel(matches[0]));
+    }
+    updateActiveProperty();
     void addMapLocations(rows, cards);
     nextLocationPage = undefined;
     if (Number.isSafeInteger(offset) && offset > Number(filters.get("offset") ?? 0)) {
@@ -792,6 +937,11 @@ const projectList = document.querySelector("#project-list");
 const projectStatus = document.querySelector("#project-status");
 const projectHistory = document.querySelector("#project-history");
 const openProject = document.querySelector("#open-project");
+const deleteProjectButton = document.querySelector("#delete-project");
+const deleteConfirmation = document.querySelector("#delete-project-confirmation");
+const deleteMessage = document.querySelector("#delete-project-message");
+const confirmDelete = document.querySelector("#confirm-delete-project");
+let pendingDeleteId;
 let projectId;
 let projectLocked = false;
 let revisionHistory = [];
@@ -809,7 +959,42 @@ function refreshProjects() {
     projectList.add(new Option(project.title, project.id));
   }
   projectList.value = projectId || "";
+  updateDeleteAction();
 }
+
+function updateDeleteAction() {
+  pendingDeleteId = undefined;
+  deleteConfirmation.hidden = true;
+  deleteProjectButton.disabled = !projectList.value;
+}
+
+projectList.addEventListener("change", updateDeleteAction);
+deleteProjectButton.addEventListener("click", () => {
+  if (projectLocked || !projectList.value) return;
+  pendingDeleteId = projectList.value;
+  deleteMessage.textContent = `Delete “${projectList.selectedOptions[0].textContent}” from this browser?`;
+  deleteConfirmation.hidden = false;
+  document.querySelector("#cancel-delete-project").focus();
+});
+document.querySelector("#cancel-delete-project").addEventListener("click", () => {
+  updateDeleteAction();
+  deleteProjectButton.focus();
+});
+confirmDelete.addEventListener("click", () => {
+  if (projectLocked || !pendingDeleteId) return;
+  try {
+    deleteProject(pendingDeleteId);
+    if (projectId === pendingDeleteId) {
+      projectId = undefined;
+      setProjectLink(null);
+    }
+    refreshProjects();
+    projectList.focus();
+    projectStatus.textContent = "Project deleted.";
+  } catch {
+    projectStatus.textContent = "Could not delete the project.";
+  }
+});
 
 function renderHistory() {
   projectHistory.hidden = !revisionHistory.length;
@@ -835,25 +1020,30 @@ function renderHistory() {
 function selectionSnapshot() {
   if (!selectedRoom) return null;
   const {modelId, roomId, label} = selectedRoom;
-  return {modelId, roomId, label, shot: currentShot()};
+  return {modelId, roomId, label, location: activeLocation || undefined, shot: currentShot()};
 }
 
 async function restoreSelection(selection) {
-  if (selection) return inspectRoom({name: selection.label || selection.modelId},
+  if (selection) return inspectRoom({name: selection.label || selection.modelId, location: selection.location},
     selection.modelId, selection.roomId, selection.shot);
   roomPanel.hidden = true;
   roomRequest?.abort();
+  activeScan = activePropertyId = undefined;
+  updateActiveProperty();
+  showLocation();
+  roomGeometry.hidden = true;
   measuredRoom.hidden = true;
   uploadMesh.hidden = true;
   importMesh.hidden = true;
   importMesh.disabled = retryMesh.disabled = false;
   selectedRoom = undefined;
   closeMesh();
-  roomPicker.hidden = canvas.hidden = capture.hidden = tools.hidden = rigWidth.hidden = true;
+  roomPicker.hidden = canvas.hidden = capture.hidden = tools.hidden = rigWidth.hidden = planViewTools.hidden = true;
+  setSidebarVisible(true);
   drawPlan = toWorld = pose = undefined;
   setDrawing(false);
   document.querySelector("#room-title").textContent = "Room plan";
-  roomStatus.textContent = "Select a linked scan to inspect its imported geometry.";
+  roomStatus.textContent = "";
   const url = new URL(location.href);
   for (const field of ["model", "room", "name"]) url.searchParams.delete(field);
   history.replaceState(null, "", url);
@@ -925,6 +1115,7 @@ document.querySelector("#new-project").addEventListener("click", () => {
   setProjectLink(null);
   projectForm.reset();
   projectList.value = "";
+  updateDeleteAction();
   revisionHistory = [];
   shortlist = [];
   renderShortlist();
@@ -971,6 +1162,7 @@ async function openSavedProject(id) {
     previousRoom = undefined;
     undoAgent.hidden = true;
     projectList.value = projectId;
+    updateDeleteAction();
     projectStatus.textContent = opened ? "Opened " + project.title + "."
       : "Opened " + project.title + ". The saved room could not be loaded.";
     return true;
@@ -1091,6 +1283,7 @@ function scoutingConstraints() {
     currentModel: lockRoom ? selectedRoom?.modelId ?? null : null,
     currentRoomId: lockRoom ? selectedRoom?.roomId ?? null : null,
     catalogFilters: shortlisted ? {} : {
+      confirmedOnly: form.elements.imported.checked,
       city: form.elements.city.value,
       category: form.elements.category.value,
     },
@@ -1155,6 +1348,7 @@ document.querySelector("#review-brief").addEventListener("click", () => {
     constraints.targetTravel === null ? "" : "Preferred travel: " + constraints.targetTravel + " m.",
     "Minimum travel: " + constraints.minimumTravel + " m.",
     constraints.requireSightlines ? "Captured sightlines required." : "Captured sightlines optional.",
+    constraints.catalogFilters.confirmedOnly ? "Search scans with confirmed room outlines." : "",
     constraints.allowImport ? "Matterport room and MatterPak imports allowed for this run." : "",
     constraints.allowApply ? "Open a qualifying proposal automatically." : "Report proposals only.",
   ];

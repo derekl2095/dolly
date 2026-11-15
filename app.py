@@ -23,7 +23,7 @@ from urllib.parse import parse_qs, unquote, urlsplit
 
 import daylight
 
-from catalog import build, coordinates_indexed, index_property_coordinates, scan_location, search_page, source_mode
+from catalog import build, coordinates_indexed, index_property_coordinates, scan_location, scan_property, search_page, source_mode
 from fetch_matterpak import MAX_ARCHIVE_BYTES, MatterPakUnavailable, download_mesh, mesh_assets, stored_locally, unpack
 from import_room import DEFAULT_ASSETS, OPENINGS_QUERY, opening_candidates, import_measured_room, import_rooms, read_model, valid_id
 from location_map import locate_property
@@ -476,6 +476,14 @@ class Handler(SimpleHTTPRequestHandler):
             return self.respond(200, {"configured": matterport_configured()})
         if url.path == "/api/agent-status":
             return self.respond(200, {"configured": configured()})
+        if url.path == "/api/scan-property":
+            model = params.get("model", [""])[0]
+            if not re.fullmatch(r"[A-Za-z0-9]{1,40}", model):
+                return self.respond(400, {"error": "Invalid scan ID."})
+            try:
+                return self.respond(200, {"property": scan_property(self.server.database, model)})
+            except sqlite3.Error:
+                return self.respond(503, {"error": "The property catalog is unavailable."})
         if url.path == "/api/location-map":
             value = params.get("property", [""])[0]
             if not re.fullmatch(r"[0-9]{1,15}", value):
