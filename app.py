@@ -326,7 +326,10 @@ class Handler(SimpleHTTPRequestHandler):
         except (ValueError, TypeError):
             return self.respond(400, {"error": "Invalid agent request."})
         try:
-            return self.respond(200, next_turn({"messages": payload["messages"], "tools": payload["tools"]}))
+            turn = {"messages": payload["messages"], "tools": payload["tools"]}
+            if payload.get("tool_choice") == "required":
+                turn["tool_choice"] = "required"
+            return self.respond(200, next_turn(turn))
         except RuntimeError as error:
             return self.respond(503, {"error": str(error)})
 

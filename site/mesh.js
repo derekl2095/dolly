@@ -1,7 +1,7 @@
 import {mountDaylight} from "./daylight.js?v=window-corner-marking";
 import {alignMesh, sightlineCheck} from "./sightlines.js?v=5";
 import {actorMarks, checkCameraHeight, loadShot, roomKey, shotSettings} from "./room-state.js";
-import {cameraMoveAxis, checkFraming, checkRigClearance, easedPathFraction, editorShotState, findSlide, interpretDirection, pathFromEndpoints, timeFractionAtPath, tracePath} from "./path.js?v=5";
+import {cameraMoveAxis, checkFraming, checkRigClearance, easedPathFraction, editorShotState, findSlide, interpretDirection, pathFromEndpoints, slideEndpoints, timeFractionAtPath, tracePath} from "./path.js?v=5";
 
 const viewport = document.querySelector("#viewport");
 const status = document.querySelector("#render-status");
@@ -654,12 +654,15 @@ function mount(THREE, room, mesh, textures, release, captured = false) {
         : "None of " + result.checked + " candidate setups passed the requested checks."};
     }
     const shift = Math.hypot(result.mark[0] - cx, result.mark[1] - cz);
+    const axis = moveAxis() || [tz - result.mark[1], result.mark[0] - tx];
+    const [start, end] = slideEndpoints(result.mark, axis, result.length);
+    const verifiedFrame = framing(start, end, focal, cameraHeight);
     return {
       setup: {cameraHeight, aimHeight, mark: result.mark, travel: result.length, lens: focal,
         sensorWidthMm: settings().sensorWidthMm, rigRadius: settings().rigRadius,
-        moveKind: moveKind.value, axis: moveAxis(), aim: [tx, tz],
+        moveKind: moveKind.value, axis, aim: [tx, tz],
         actors: actors.map(point => point.slice()), requireSightlines: checkMesh},
-      ceiling, clearanceMargin: result.margin, sightlinesSampled: raysChecked > 0,
+      ceiling, clearanceMargin: result.margin, framingMargin: verifiedFrame?.margin, sightlinesSampled: raysChecked > 0,
       reason: "Checked " + result.checked + " setups. " +
         (shift ? "Shifted the camera mark " + shift.toFixed(2) + " m. " : "") +
         (result.length ? "Found " + result.length.toFixed(2) + " m of camera travel. " : "Found a static shot. ") +

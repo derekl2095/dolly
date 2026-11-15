@@ -54,7 +54,7 @@ select {max-width:100%} canvas {width:100%;display:block;margin-top:12px;backgro
 #transport input[type="range"] {width:90px;padding:0}
 @media(max-width:700px){.layout{grid-template-columns:1fr}}
 </style>
-<link rel="stylesheet" href="scout-studio.css?v=confirmed-agent-2">
+<link rel="stylesheet" href="scout-studio.css?v=brief-review">
 </head>
 <body><main>
 <header class="studio-header">
@@ -115,24 +115,29 @@ select {max-width:100%} canvas {width:100%;display:block;margin-top:12px;backgro
 <summary>Scout with a shot brief</summary>
 <form id="agent-form">
 <label>Shot brief <input name="brief" maxlength="1200" required placeholder="A 35 mm two-shot in a Houston office"></label>
-<label>Lock lens (mm) <input name="lens" type="number" min="15" max="150" placeholder="Optional"></label>
-<label>Lock camera move <select name="locked-move"><option value="">Flexible</option><option value="slide">Lateral slide</option><option value="push">Push-in</option><option value="pull">Pull-back</option><option value="static">Static</option></select></label>
+<button type="button" id="review-brief">Review brief</button>
+<details id="shot-plan"><summary>Shot plan</summary><div class="shot-plan-controls">
+<label>Required lens (mm) <input name="lens" type="number" min="15" max="150" placeholder="Optional"></label>
+<label>Required camera move <select name="locked-move"><option value="">Flexible</option><option value="slide">Lateral slide</option><option value="push">Push-in</option><option value="pull">Pull-back</option><option value="static">Static</option></select></label>
 <label>Preferred travel (m) <input name="target-travel" type="number" min="0" max="4" step="any" placeholder="Optional"></label>
-<label>Minimum travel (m) <input name="minimum-travel" type="number" min="0" max="4" step="any" placeholder="Optional"></label>
+<label>Required minimum travel (m) <input name="minimum-travel" type="number" min="0" max="4" step="any" placeholder="Optional"></label>
 <label><input name="require-sightlines" type="checkbox"> Require captured sightlines for agent proposals</label>
 <label><input name="shortlist-only" type="checkbox"> Scout shortlisted scans only</label>
 <label><input name="lock-room" type="checkbox"> Lock current room</label>
 <label><input name="import-outlines" type="checkbox"> Allow the agent to fetch room outlines and MatterPaks</label>
-<label><input name="apply" type="checkbox" checked> Open checked proposal</label>
+<label><input name="apply" type="checkbox"> Open checked proposal</label>
 <p>Catalog searches use the city and property type selected above.</p>
-<button type="button" id="suggest-constraints">Fill lens and travel from brief</button>
-<button type="button" id="review-brief">Review constraints</button>
+</div></details>
 <section id="brief-review" hidden aria-label="Reviewed shot constraints"><ul></ul></section>
 <button type="submit" id="investigate-shot" disabled>Investigate</button>
 </form>
 <p id="agent-result" role="status"></p>
+<section id="agent-options" aria-label="Playable shots"></section>
+<details id="agent-tests" hidden>
+<summary>How Scout tested this</summary>
 <section id="agent-evidence" aria-label="Scouting evidence"></section>
 <ol id="agent-activity" aria-label="Scouting activity"></ol>
+</details>
 <button id="undo-agent" type="button" hidden>Undo applied proposal</button>
 </details>
 <details id="compare">
@@ -287,4 +292,4 @@ select {max-width:100%} canvas {width:100%;display:block;margin-top:12px;backgro
 </div>
 </main>
 <script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js","three-mesh-bvh":"https://cdn.jsdelivr.net/npm/three-mesh-bvh@0.8.3/build/index.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"}}</script>
-<script type="module" src="scout.js?v=confirmed-agent"></script></body></html>
+<script type="module" src="scout.js?v=brief-review"></script></body></html>

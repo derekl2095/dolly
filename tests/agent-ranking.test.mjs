@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import {briefSuggestions, runAgent} from "../site/agent.js";
+import {briefSuggestions, reviewShotBrief, runAgent} from "../site/agent.js";
 
 test("agent ranks qualifying results and rejects a below-minimum shot", async () => {
   let evidence;
@@ -386,4 +386,166 @@ test("an agent downloads its preferred capture and opens the next qualifying sca
   assert.equal(opened.captureRequired, true);
   assert.equal(opened.setup.lens, 35);
   assert.match(result, /Opened shot-2/);
+});
+
+test("agent retries a failed candidate and opens a tested shot without changing its lens or staging", async () => {
+  const model = "Office";
+  const room = {
+    modelId: model, roomId: "room", height: 3,
+    outline: [[-6, -6], [6, -6], [6, 6], [-6, 6]],
+    camera: [0, 2], lookAt: [0, 0], actors: [[-.75, 0], [.75, 0]], slideAxis: [1, 0],
+  };
+  const call = (name, args) => ({
+    id: name, function: {name, arguments: JSON.stringify(args)},
+  });
+  const responses = [
+    {tool_calls: [call("get_room_evidence", {model, room: "room"})]},
+    {tool_calls: [call("evaluate_shot", {model, room: "room", lens: 35, move: "slide", slide: 1})]},
+    {tool_calls: [call("retry_candidate", {candidate: "shot-1", adjustment: "back_up", meters: 2})]},
+    {tool_calls: [call("apply_shot", {candidate: "shot-2"})]},
+    {content: "Checked the backed-up camera."},
+  ];
+  let opened;
+  let evidence;
+  await runAgent("Keep the 35 mm lens and both actors in frame throughout a 1 m slide.", {
+    shortlist: [{modelId: model}], lockedLens: 35, lockedMove: "slide",
+    allowApply: true, minimumTravel: 1, activity() {},
+    onEvidence(value) { evidence = value; },
+    apply(_room, setup) { opened = setup; },
+    async api(path) { return path.startsWith("/api/room?") ? room : responses.shift(); },
+  });
+  assert.equal(evidence.candidates.find(item => item.id === "shot-1").status, "failed");
+  assert.equal(evidence.candidates.find(item => item.id === "shot-2").parent, "shot-1");
+  assert.equal(opened.lens, 35);
+  assert.equal(opened.travel, 1);
+  assert.deepEqual(opened.mark, [0, 4]);
+  assert.deepEqual(opened.aim, room.lookAt);
+  assert.deepEqual(opened.actors, room.actors);
+});
+
+test("agent presents a recommendation and at most two alternatives from distinct rooms", async () => {
+  const models = ["First", "Second", "Third", "Fourth"];
+  const call = (name, args, id = name + args.model) => ({
+    id, function: {name, arguments: JSON.stringify(args)},
+  });
+  const evaluation = (model, id) => call("evaluate_shot", {model, room: "room", lens: 35,
+    move: "slide", slide: .7}, id);
+  const responses = [
+    {tool_calls: models.map(model => call("get_room_evidence", {model, room: "room"}))},
+    {tool_calls: models.map(model => evaluation(model, "check-" + model))},
+    {tool_calls: [evaluation("First", "repeat-First"), evaluation("Second", "repeat-Second")]},
+    {tool_calls: [call("apply_shot", {candidate: "shot-1"}, "apply-first")]},
+    {content: "Compared rooms."},
+  ];
+  let alternatives;
+  let opened;
+  let results;
+  await runAgent("Find a room for a 35 mm slide.", {
+    shortlist: models.map(modelId => ({modelId})), allowApply: true,
+    activity() {}, onAlternatives(value) { alternatives = value; },
+    onResults(value) { results = value; },
+    apply(room) { opened = room.modelId; },
+    async api(path) {
+      const url = new URL(path, "http://localhost");
+      if (url.pathname === "/api/agent-turn") return responses.shift();
+      return {modelId: url.searchParams.get("model"), roomId: "room", height: 3,
+        outline: [[-3,-6],[3,-6],[3,6],[-3,6]], camera: [0,4], lookAt: [0,0],
+        actors: [[-.5,0],[.5,0]], slideAxis: [1,0]};
+    },
+  });
+  assert.equal(opened, "First");
+  assert.deepEqual(results.options.map(option => option.room.modelId), ["First", "Second", "Third"]);
+  assert.ok(results.options[0].opened);
+  assert.deepEqual(alternatives.map(item => item.room.modelId), ["Second", "Third"]);
+});
+
+test("agent can reuse a scan download when the first room fails to open", async () => {
+  const model = "Office";
+  const rooms = ["first", "second", "third"];
+  const call = (name, room, args) => ({
+    id: name + room, function: {name, arguments: JSON.stringify(args)},
+  });
+  const responses = [
+    {tool_calls: rooms.map(room => call("get_room_evidence", room, {model, room}))},
+    {tool_calls: rooms.map(room => call("evaluate_shot", room, {model, room, lens: 35,
+      move: "slide", slide: .7}))},
+    {tool_calls: [call("apply_shot", "first", {candidate: "shot-1"})]},
+    {content: "Compared rooms."},
+  ];
+  let downloads = 0;
+  const opened = [];
+  let alternatives;
+  let evidence;
+  await runAgent("Find an office for a 35 mm slide.", {
+    shortlist: [{modelId: model}], allowApply: true, allowImport: true, activity() {},
+    onAlternatives(value) { alternatives = value; },
+    onEvidence(value) { evidence = value; },
+    apply(room) {
+      opened.push(room.roomId);
+      if (room.roomId === "first") throw Object.assign(Error("Room failed alignment."), {code: "capture-unavailable"});
+    },
+    async api(path) {
+      const url = new URL(path, "http://localhost");
+      if (url.pathname === "/api/agent-turn") return responses.shift();
+      if (url.pathname === "/api/import-matterpak") {
+        downloads++;
+        return {cached: false};
+      }
+      assert.equal(url.pathname, "/api/room");
+      return {modelId: model, roomId: url.searchParams.get("room"), height: 3,
+        outline: [[-3,-6],[3,-6],[3,6],[-3,6]], camera: [0,4], lookAt: [0,0],
+        actors: [[-.5,0],[.5,0]], slideAxis: [1,0]};
+    },
+  });
+  assert.equal(downloads, 1);
+  assert.deepEqual(opened, ["first", "second"]);
+  assert.equal(evidence.recommended, "shot-2");
+  assert.deepEqual(alternatives.map(item => item.room.roomId), ["third"]);
+});
+
+test("review interprets a push-in without inventing numeric constraints", async () => {
+  let calls = 0;
+  const draft = await reviewShotBrief("Start wide and drift closer without losing either actor.", {
+    async api(path, options) {
+      calls++;
+      assert.equal(path, "/api/agent-turn");
+      const payload = JSON.parse(options.body);
+      assert.equal(payload.tool_choice, "required");
+      assert.deepEqual(payload.tools.map(tool => tool.function.name), ["review_shot_brief"]);
+      return {tool_calls: [{function: {name: "review_shot_brief", arguments: JSON.stringify({
+        move: "push", lens: 35, targetTravel: 1, minimumTravel: .5, scope: null,
+      })}}]};
+    },
+  });
+  assert.equal(calls, 1);
+  assert.deepEqual(draft, {move: "push", lens: null, targetTravel: null, minimumTravel: null, scope: null});
+});
+
+test("review accepts explicit values and surfaces provider unavailability", async () => {
+  const brief = "35 mm push-in, ideally 1 meter and at least 60 cm. Stay in this room.";
+  const draft = await reviewShotBrief(brief, {api: async () => ({
+    tool_calls: [{function: {name: "review_shot_brief", arguments: JSON.stringify({
+      move: "push", lens: 35, targetTravel: 1, minimumTravel: .6, scope: "current_room",
+    })}}],
+  })});
+  assert.deepEqual(draft, {move: "push", lens: 35, targetTravel: 1, minimumTravel: .6, scope: "current_room"});
+  await assert.rejects(reviewShotBrief(brief, {api: async () => { throw Error("Provider offline"); }}),
+    /Provider offline/);
+});
+
+test("an unqualified shot stays a measured tradeoff with no playable action", async () => {
+  const call = {id: "revise", function: {name: "revise_current_shot",
+    arguments: JSON.stringify({slide: 1, lens: null, cameraHeight: null, objective: "travel"})}};
+  const turns = [{tool_calls: [call]}, {content: "Checked the open room."}];
+  let results;
+  await runAgent("Keep this room and get at least 1 m of travel.", {
+    current: {lens: 35, travel: .7, moveKind: "slide"}, currentModel: "Current", minimumTravel: 1,
+    allowApply: true, activity() {}, onResults(value) { results = value; },
+    revise: () => ({setup: {travel: .8}, reason: "Room wall limits travel."}),
+    apply() { assert.fail("An unqualified setup must never apply."); },
+    async api() { return turns.shift(); },
+  });
+  assert.deepEqual(results.options, []);
+  assert.deepEqual(results.tradeoff.unmet, ["Minimum travel"]);
+  assert.equal(results.tradeoff.travel, .8);
 });

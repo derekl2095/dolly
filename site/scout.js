@@ -1,9 +1,9 @@
 import {maxCurvePoints, readShotExport, roundStroke} from "./path.js?v=5";
 import {deleteProject, parseProjectArchive, projectArchiveMaxBytes, readProjects, writeProject} from "./projects.js?v=11";
 import {loadObstacles, outlineMeasurements, roomKey} from "./room-state.js";
-import {briefSuggestions, runAgent} from "./agent.js?v=confirmed-agent";
+import {briefSuggestions, reviewShotBrief, runAgent} from "./agent.js?v=brief-review";
 import {compareCapturedRooms} from "./compare.js";
-import {openMesh, closeMesh, currentShot, planCurrentShot, applyCurrentShot} from "./mesh.js?v=window-corner-marking";
+import {openMesh, closeMesh, currentShot, planCurrentShot, applyCurrentShot} from "./mesh.js?v=brief-review";
 import {addMapLocations, resetLocationMap} from "./location-map.js?v=9";
 
 const form = document.querySelector("#scout-search");
@@ -931,6 +931,8 @@ comparison.addEventListener("submit", async event => {
 const agentForm = document.querySelector("#agent-form");
 const agentResult = document.querySelector("#agent-result");
 const agentEvidence = document.querySelector("#agent-evidence");
+const agentOptions = document.querySelector("#agent-options");
+const agentTests = document.querySelector("#agent-tests");
 const agentActivity = document.querySelector("#agent-activity");
 const projectForm = document.querySelector("#project-form");
 const projectList = document.querySelector("#project-list");
@@ -1077,6 +1079,10 @@ function agentSettings() {
 
 function setAgentSettings(settings = {}) {
   clearBriefReview();
+  interpretedBrief = undefined;
+  inferredFields.clear();
+  manuallyEdited.clear();
+  shotPlan.open = false;
   agentForm.elements["import-outlines"].checked = false;
   agentForm.elements.brief.value = settings.brief ?? "";
   agentForm.elements.lens.value = settings.lens ?? "";
@@ -1086,7 +1092,7 @@ function setAgentSettings(settings = {}) {
   agentForm.elements["shortlist-only"].checked = settings.shortlistOnly === true;
   agentForm.elements["lock-room"].checked = settings.lockRoom === true;
   agentForm.elements["require-sightlines"].checked = settings.requireSightlines === true;
-  agentForm.elements.apply.checked = settings.apply !== false;
+  agentForm.elements.apply.checked = settings.apply === true;
 }
 
 projectForm.addEventListener("submit", event => {
@@ -1123,8 +1129,7 @@ document.querySelector("#new-project").addEventListener("click", () => {
   undoAgent.hidden = true;
   setAgentSettings();
   renderHistory();
-  agentEvidence.replaceChildren();
-  agentActivity.replaceChildren();
+  clearAgentResults();
   agentResult.textContent = "";
   form.reset();
   resetLocationSearch();
@@ -1153,8 +1158,7 @@ async function openSavedProject(id) {
     resetLocationSearch();
     status.textContent = "";
     if (project.query?.trim() || project.filters?.city || project.filters?.category || project.filters?.linked || project.filters?.imported) form.requestSubmit();
-    agentEvidence.replaceChildren();
-    agentActivity.replaceChildren();
+    clearAgentResults();
     agentResult.textContent = "";
     revisionHistory = project.revisions || [];
     shortlist = project.shortlist || [];
@@ -1263,7 +1267,19 @@ undoAgent.addEventListener("click", async () => {
 });
 const briefReview = document.querySelector("#brief-review");
 const investigate = document.querySelector("#investigate-shot");
-let reviewedBrief;
+const reviewButton = document.querySelector("#review-brief");
+const shotPlan = document.querySelector("#shot-plan");
+let reviewedBrief, interpretedBrief, reviewRequest;
+const inferredFields = new Map();
+const manuallyEdited = new Set();
+
+function clearAgentResults() {
+  agentOptions.replaceChildren();
+  agentEvidence.replaceChildren();
+  agentActivity.replaceChildren();
+  agentTests.hidden = true;
+  agentTests.open = false;
+}
 
 function scoutingConstraints() {
   const inputs = new FormData(agentForm);
@@ -1291,36 +1307,86 @@ function scoutingConstraints() {
 }
 
 function clearBriefReview() {
+  reviewRequest?.abort();
+  reviewRequest = undefined;
+  reviewButton.disabled = false;
   reviewedBrief = undefined;
   briefReview.hidden = true;
   investigate.disabled = true;
 }
 
-agentForm.addEventListener("input", clearBriefReview);
+agentForm.addEventListener("input", event => {
+  clearBriefReview();
+  const name = event.target.name;
+  if (name === "brief") {
+    for (const [field, previous] of inferredFields) {
+      const input = agentForm.elements[field];
+      if (input.type === "checkbox") {
+        if (input.checked === previous) input.checked = false;
+      } else if (input.value === previous) input.value = "";
+    }
+    inferredFields.clear();
+    interpretedBrief = undefined;
+  } else {
+    inferredFields.delete(name);
+    manuallyEdited.add(name);
+  }
+});
 form.addEventListener("change", clearBriefReview);
-document.querySelector("#suggest-constraints").addEventListener("click", () => {
-  if (projectLocked) return;
-  const {lens, minimumTravel} = briefSuggestions(agentForm.elements.brief.value);
-  const filled = [];
-  for (const [name, value, label] of [
-    ["lens", lens, "lens"],
-    ["minimum-travel", minimumTravel, "minimum travel"],
-  ]) {
+
+function fillReviewSuggestions(draft) {
+  for (const [name, value] of [["lens", draft.lens], ["locked-move", draft.move],
+      ["target-travel", draft.targetTravel], ["minimum-travel", draft.minimumTravel]]) {
     const field = agentForm.elements[name];
-    if (value !== null && field.value === "") {
+    if (value !== null && !field.value && !manuallyEdited.has(name)) {
       field.value = String(value);
-      filled.push(label);
+      inferredFields.set(name, field.value);
     }
   }
-  if (filled.length) clearBriefReview();
-  agentResult.textContent = filled.length
-    ? "Filled " + filled.join(" and ") + ". Edit the values or review constraints."
-    : "No empty fields matched. Use “35 mm lens” or “at least 0.7 m of travel” in the brief.";
-});
+  const shortlistOnly = agentForm.elements["shortlist-only"];
+  const lockRoom = agentForm.elements["lock-room"];
+  if (!shortlistOnly.checked && !lockRoom.checked &&
+      !manuallyEdited.has("shortlist-only") && !manuallyEdited.has("lock-room")) {
+    const field = draft.scope === "shortlist" ? shortlistOnly : draft.scope === "current_room" ? lockRoom : null;
+    if (field) {
+      field.checked = true;
+      inferredFields.set(field.name, true);
+    }
+  }
+}
 
-document.querySelector("#review-brief").addEventListener("click", () => {
+reviewButton.addEventListener("click", async () => {
   if (projectLocked || !agentForm.reportValidity()) return;
   clearBriefReview();
+  shotPlan.open = true;
+  const brief = agentForm.elements.brief.value.trim();
+  if (!brief) {
+    agentResult.textContent = "Enter a shot brief.";
+    return;
+  }
+  let reviewMessage = interpretedBrief?.message ?? "";
+  if (interpretedBrief?.brief !== brief) {
+    const request = new AbortController();
+    reviewRequest = request;
+    reviewButton.disabled = true;
+    agentResult.textContent = "Reading the shot brief…";
+    try {
+      const draft = await reviewShotBrief(brief, {signal: request.signal});
+      if (request.signal.aborted) return;
+      fillReviewSuggestions(draft);
+      reviewMessage = "Check the suggested shot plan, then investigate.";
+    } catch {
+      if (request.signal.aborted) return;
+      fillReviewSuggestions({move: null, scope: null, targetTravel: null, ...briefSuggestions(brief)});
+      reviewMessage = "Model review unavailable. Check the shot plan manually. Investigation needs a connected model provider.";
+    } finally {
+      if (reviewRequest === request) {
+        reviewRequest = undefined;
+        reviewButton.disabled = false;
+      }
+    }
+    interpretedBrief = {brief, message: reviewMessage};
+  }
   const constraints = scoutingConstraints();
   if (!constraints.brief || (constraints.shortlist && !constraints.shortlist.length) ||
       (constraints.lockedRoom && (!constraints.currentModel || !currentShot()))) {
@@ -1357,14 +1423,67 @@ document.querySelector("#review-brief").addEventListener("click", () => {
   briefReview.hidden = false;
   reviewedBrief = JSON.stringify(constraints);
   investigate.disabled = false;
-  agentResult.textContent = "Review the constraints, then investigate.";
+  agentResult.textContent = reviewMessage;
 });
+
+function renderAgentOptions(options, tradeoff, {initialRoom, initialShot}) {
+  agentOptions.replaceChildren();
+  if (!options.length) {
+    if (tradeoff) {
+      const card = element("article", "");
+      card.append(element("h3", "Closest measured tradeoff"),
+        element("p", roomName(tradeoff.label, tradeoff.room) + " · " + tradeoff.travel.toFixed(2) + " m of travel"),
+        element("p", "Misses " + tradeoff.unmet.join(", ") + "."),
+        element("p", tradeoff.outcome));
+      agentOptions.append(card);
+    } else {
+      agentOptions.append(element("p", "No tested setup is ready to open. Check the scouting evidence below."));
+    }
+    return;
+  }
+
+  for (const [index, option] of options.entries()) {
+    const {room, setup, report, opened} = option;
+    const card = element("article", "");
+    const label = room ? roomName(room.label, room.roomId) : "Current room";
+    card.append(element("h3", (index === 0 ? "Recommended" : "Alternative " + index) + " · " + label));
+    const measurements = [
+      report.travel.toFixed(2) + " m of travel",
+      Number.isFinite(report.framingMargin) ? Math.floor(report.framingMargin * 100) + "% tightest frame margin" : "Frame margin unavailable",
+      report.sightlinesSampled ? "Captured sightlines checked" : "Captured sightlines unverified",
+    ];
+    card.append(element("p", measurements.join(" · ")));
+    if (opened) card.append(element("p", "Opened in the shot editor."));
+    const open = element("button", "Open shot");
+    open.type = "button";
+    open.addEventListener("click", async () => {
+      if (projectLocked || agentOptions.querySelector("button[disabled]")) return;
+      open.disabled = true;
+      try {
+        if (room) await openCheckedProposal(room, setup);
+        else {
+          if (selectedRoom !== initialRoom || JSON.stringify(currentShot()) !== initialShot)
+            throw Error("The original shot changed. Investigate the current shot again before applying this revision.");
+          applyCurrentShot(setup);
+        }
+        agentResult.textContent = "Opened the tested shot in " + label + ".";
+      } catch (error) {
+        agentResult.textContent = error.message;
+      } finally {
+        open.disabled = false;
+      }
+    });
+    card.append(open);
+    agentOptions.append(card);
+  }
+}
 
 agentForm.addEventListener("submit", async event => {
   event.preventDefault();
   if (projectLocked) return;
   const constraints = scoutingConstraints();
-  if (reviewedBrief !== JSON.stringify(constraints)) {
+  const confirmation = JSON.stringify(constraints);
+  if (reviewedBrief !== confirmation) {
     clearBriefReview();
     agentResult.textContent = "Review the current constraints before investigating.";
     return;
@@ -1381,8 +1500,8 @@ agentForm.addEventListener("submit", async event => {
   let expectedRoom = initialRoom;
   let expectedShot = initialShot;
   button.disabled = true;
-  agentEvidence.replaceChildren();
-  agentActivity.replaceChildren();
+  clearAgentResults();
+  agentTests.hidden = false;
   agentResult.textContent = "Investigating the shot…";
   try {
     const prior = initialRoom
@@ -1420,6 +1539,7 @@ agentForm.addEventListener("submit", async event => {
             entry.append(element("strong", [roomName(label, room),
               id === recommended ? "Top technical match" : status.replace("missing-evidence", "Missing evidence"),
               id === queued ? "Selected proposal" : ""].filter(Boolean).join(" · ")));
+            if (candidate.parent) entry.append(element("p", "Retried " + candidate.parent + " · " + candidate.adjustment));
             entry.append(element("p", outcome));
             const measurements = [
               Number.isFinite(travel) ? travel.toFixed(2) + " m of " + requested.toFixed(2) + " m requested" : "",
@@ -1452,29 +1572,16 @@ agentForm.addEventListener("submit", async event => {
           agentEvidence.append(element("h3", "Leads needing room evidence"), list);
         }
       },
-      onAlternatives: alternatives => {
-        for (const {id, room, setup} of alternatives) {
-          const entry = agentEvidence.querySelector('[data-candidate="' + id + '"]');
-          if (!entry) continue;
-          const open = element("button", "Open checked setup");
-          open.type = "button";
-          open.addEventListener("click", async () => {
-            if (projectLocked) return;
-            open.disabled = true;
-            try {
-              await openCheckedProposal(room, setup);
-              agentResult.textContent = "Opened " + id + " for review.";
-            } catch (error) {
-              agentResult.textContent = error.message;
-            } finally {
-              open.disabled = false;
-            }
-          });
-          entry.append(open);
-        }
+      onResults: ({options, tradeoff}) => {
+        renderAgentOptions(options, tradeoff, {initialRoom, initialShot});
       },
-      activity: text => agentActivity.append(element("li", text)),
+      activity: text => {
+        agentActivity.append(element("li", text));
+        agentResult.textContent = text;
+      },
       apply: async (room, setup, requireCapture) => {
+        if (reviewedBrief !== confirmation || JSON.stringify(scoutingConstraints()) !== confirmation)
+          throw Error("The shot plan changed during scouting. Review the updated plan to run again.");
         if (expectedRoom !== selectedRoom || expectedShot !== JSON.stringify(currentShot()))
           throw Error("The open setup changed during scouting. Your changes were kept.");
         if (!room) {

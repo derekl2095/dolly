@@ -16,6 +16,9 @@ const definitions = [
   ["evaluate_shot", "Test a lens and camera move in an inspected room. Returns a candidate ID.",
     {model: {type: "string"}, room: {type: ["string", "null"]},
      lens: {type: "integer"}, slide: {type: "number"}, requireSightlines: {type: "boolean"}, move: {type: "string", enum: ["slide", "push", "pull", "static"]}}],
+  ["retry_candidate", "Test a technical change to the camera center of a previously evaluated candidate, including a failure. Keeps room, lens, move, travel target, actors and aim. Back up for framing or shift sideways for obstructions; use a different room if the retry fails.",
+    {candidate: {type: "string"}, adjustment: {type: "string", enum: ["back_up", "shift_left", "shift_right"]},
+     meters: {type: "number", minimum: .15, maximum: 2}}],
   ["revise_current_shot", "Test a revision against the open editor, preserving its actor marks, aim, camera lock and keeping lens and camera height unless explicitly supplied.",
     {slide: {type: ["number", "null"]}, lens: {type: ["number", "null"]},
      cameraHeight: {type: ["number", "null"]}, objective: {type: "string", enum: ["travel", "tighter"]}}],
@@ -48,7 +51,49 @@ export function briefSuggestions(brief) {
   };
 }
 
-export async function runAgent(brief, {activity, apply, lockedLens = null, lockedMove = null, allowApply, current, revise, lockedRoom, requireSightlines = false, minimumTravel = 0, targetTravel = null, shortlist = null, currentModel, catalogFilters = {}, onEvidence = () => {}, onAlternatives = () => {}, allowImport = false, api = request}) {
+export async function reviewShotBrief(brief, {api = request, signal} = {}) {
+  const properties = {
+    move: {enum: ["slide", "push", "pull", "static", null]},
+    lens: {type: ["integer", "null"]},
+    targetTravel: {type: ["number", "null"]},
+    minimumTravel: {type: ["number", "null"]},
+    scope: {enum: ["catalog", "shortlist", "current_room", null]},
+  };
+  const result = await api("/api/agent-turn", {
+    method: "POST", headers: {"Content-Type": "application/json"}, signal,
+    body: JSON.stringify({
+      messages: [
+        {role: "system", content: "Interpret a director's brief as a draft to be reviewed. Call review_shot_brief once. Infer move from clear directional language, such as drift closer meaning push. Use null when ambiguous. Use lens only for an explicit focal length. Use meters for requested camera travel, distinguish a preferred target from a hard minimum, and leave absent numbers null. Use scope only if the director explicitly specifies it. Both actors staying in frame throughout is already checked by Scout."},
+        {role: "user", content: brief},
+      ],
+      tools: [{type: "function", function: {name: "review_shot_brief", description: "Return draft technical shot constraints.",
+        parameters: {type: "object", properties, required: Object.keys(properties), additionalProperties: false}}}],
+      tool_choice: "required",
+    }),
+  });
+  const calls = result.tool_calls;
+  if (calls?.length !== 1 || calls[0].function.name !== "review_shot_brief")
+    throw Error("The model did not return a brief review.");
+  const draft = JSON.parse(calls[0].function.arguments);
+  if (!draft || typeof draft !== "object" || Array.isArray(draft))
+    throw Error("The model did not return valid shot constraints.");
+  const lenses = [...brief.matchAll(/(?<![.\d])(\d+)\s*(?:mm|millimeters?|millimetres?)\b/gi)]
+    .map(match => Number(match[1]));
+  const distances = [...brief.matchAll(/(?<![.\d])(\d+(?:\.\d+)?)\s*(m|meters?|metres?|cm|centimeters?|centimetres?)\b/gi)]
+    .map(match => Number(match[1]) / (/^c/i.test(match[2]) ? 100 : 1));
+  const travel = value => Number.isFinite(value) && value >= 0 && value <= 4 &&
+    distances.some(distance => Math.abs(distance - value) < 1e-8) ? value : null;
+  return {
+    move: ["slide", "push", "pull", "static"].includes(draft.move) ? draft.move : null,
+    lens: Number.isInteger(draft.lens) && draft.lens >= 15 && draft.lens <= 150 &&
+      lenses.includes(draft.lens) ? draft.lens : null,
+    targetTravel: travel(draft.targetTravel),
+    minimumTravel: travel(draft.minimumTravel),
+    scope: ["catalog", "shortlist", "current_room"].includes(draft.scope) ? draft.scope : null,
+  };
+}
+
+export async function runAgent(brief, {activity, apply, lockedLens = null, lockedMove = null, allowApply, current, revise, lockedRoom, requireSightlines = false, minimumTravel = 0, targetTravel = null, shortlist = null, currentModel, catalogFilters = {}, onEvidence = () => {}, onAlternatives = () => {}, onResults = () => {}, allowImport = false, api = request}) {
   if (lockedMove !== null && !["slide", "push", "pull", "static"].includes(lockedMove))
     throw Error("Unsupported camera move lock.");
   if (targetTravel !== null && (!Number.isFinite(targetTravel) || targetTravel < minimumTravel || targetTravel > 4))
@@ -66,6 +111,7 @@ export async function runAgent(brief, {activity, apply, lockedLens = null, locke
   const inspected = new Map();
   const importAttempts = new Set();
   const importErrors = new Map();
+  const retried = new Set();
   const captureAttempts = new Map();
   const importTools = new Set(["import_capture_outline", "prepare_capture"]);
   const availableTools = allowImport ? tools : tools.filter(tool => !importTools.has(tool.function.name));
@@ -121,7 +167,8 @@ export async function runAgent(brief, {activity, apply, lockedLens = null, locke
     const coverage = {propertiesFound: shortlist ? null : leads.size,
       shortlistedScans: shortlist?.length ?? null, roomsEvaluated: evaluatedRooms.size};
     onEvidence({coverage, candidates: ranked, unverifiedLeads: actionableLeads, recommended: ranked.find(item =>
-      item.status === "qualifies")?.id, queued: proposal?.report.id});
+      item.status === "qualifies" && !reopenFailedRooms.has(key(item.model, item.room ?? null)))?.id,
+      queued: proposal?.report.id});
   }
   const key = (model, room) => JSON.stringify([model, room]);
   const instructions = [
@@ -144,7 +191,9 @@ export async function runAgent(brief, {activity, apply, lockedLens = null, locke
     current ? `Open editor: ${JSON.stringify(current)}.` : "There is no open shot.",
     "New-room comparisons check walls, marked furniture and sampled framing, with optional sampled sightlines against aligned scans. Current-room revisions also check marked furniture and require sampled mesh sightlines when the editor enables that option.",
     "compare_setups ranks by constraint compliance, distance from the crew’s target travel when set, otherwise requested travel shortfall, sampled sightlines, rig clearance, and framing margin. Explain any choice that differs from that technical ranking using the crew’s stated preferences.",
-    "Use rejection counts to select the next test. For framing failures, try another allowed lens or room. For sightline failures, consider shorter travel or another room. Treat a short or static fallback as a tradeoff and report its actual travel.",
+    "Interpret the brief in concrete technical terms and preserve the director’s stated intent. For example, drift closer is a push-in; both actors must stay visible requires framing checks throughout. Do not invent numeric constraints from vague creative language or change actor marks, a specified lens or move as a workaround.",
+    "Use rejection counts to select the next test. For framing, try retry_candidate with back_up. For an obstruction, try a lateral shift or switch rooms. A retry keeps creative choices fixed. Treat a short or static fallback as a tradeoff and report its actual travel.",
+    "When room choice is flexible, compare different rooms. Return a recommendation and up to two qualifying alternatives in distinct rooms. State the measured differences and what is still unverified.",
     "Preserve the user's creative intent. apply_shot queues a proposal. The editor opens it after you finish. Describe it as queued.",
     allowApply ? "Queue a qualifying proposal to honor the crew’s preferences. If you finish without queuing one, the top qualifying technical match opens automatically." : "Compare only. Applying is disabled.",
     lockedMove ? `Camera move is locked to ${lockedMove}.` : "",
@@ -152,6 +201,7 @@ export async function runAgent(brief, {activity, apply, lockedLens = null, locke
   ].join(" ");
   const messages = [{role: "system", content: instructions}, {role: "user", content: brief}];
   let proposal;
+  const reopenFailedRooms = new Set();
 
   let nextSearchPage;
   async function searchPage(params) {
@@ -174,6 +224,24 @@ export async function runAgent(brief, {activity, apply, lockedLens = null, locke
     }
     activity(`CoStar returned ${rows.length} properties at offset ${offset}.`);
     return {rows, mode: data.mode, hasMore: Boolean(nextSearchPage)};
+  }
+
+  async function checkCandidate(room, {lens, move, travel, captured, trial, parent, adjustment}) {
+    const [result] = await compareCapturedRooms([room], lens, travel, move, captured, undefined,
+      {...current, minimumTravel: Math.min(minimumTravel, travel)}, trial);
+    const id = "shot-" + (candidates.size + 1);
+    const report = {id, label: room.label, model: room.modelId, room: room.roomId ?? null, requested: travel,
+      lens, move, sensorWidthMm: result.setup?.sensorWidthMm ?? null,
+      cameraHeight: result.setup?.cameraHeight ?? null, rigRadius: result.setup?.rigRadius ?? null,
+      travel: result.length >= 0 ? result.length : null, outcome: result.reason,
+      solverStatus: result.status, missingEvidence: result.missing, evaluation: result.evaluation,
+      ceiling: result.ceiling, clearanceMargin: result.clearanceMargin, framingMargin: result.framingMargin,
+      markedObstacles: result.markedObstacles, sightlinesSampled: result.sightlinesSampled,
+      unverified: result.sightlinesSampled ? ["unmarked furniture"] : ["unmarked furniture", "captured sightlines"],
+      ...(parent ? {parent, adjustment} : {})};
+    candidates.set(id, {room, setup: result.setup, report, staging: result.staging, captured});
+    activity(`${parent ? `Retried ${parent} (${adjustment}) in` : "Checked"} ${room.label || room.modelId} at ${lens} mm: ${result.reason}`);
+    return report;
   }
 
   async function execute(name, args) {
@@ -270,17 +338,34 @@ export async function runAgent(brief, {activity, apply, lockedLens = null, locke
         const move = args.move ?? lockedMove ?? "slide";
         if (lockedMove && move !== lockedMove) throw Error("The camera move is locked.");
         if (!["slide", "push", "pull", "static"].includes(move)) throw Error("Unsupported camera move.");
-        const [result] = await compareCapturedRooms([room], args.lens, args.slide, move, requireSightlines || args.requireSightlines === true, undefined, current);
-        const id = "shot-" + (candidates.size + 1);
-        const report = {id, label: room.label, model: room.modelId, room: room.roomId || null, requested: args.slide,
-          lens: args.lens, move, sensorWidthMm: result.setup?.sensorWidthMm ?? null,
-          cameraHeight: result.setup?.cameraHeight ?? null, rigRadius: result.setup?.rigRadius ?? null, travel: result.length >= 0 ? result.length : null,
-          outcome: result.reason, solverStatus: result.status, missingEvidence: result.missing, evaluation: result.evaluation, ceiling: result.ceiling, clearanceMargin: result.clearanceMargin, framingMargin: result.framingMargin,
-          markedObstacles: result.markedObstacles, sightlinesSampled: result.sightlinesSampled,
-          unverified: result.sightlinesSampled ? ["unmarked furniture"] : ["unmarked furniture", "captured sightlines"]};
-        candidates.set(id, {room, setup: result.setup, report});
-        activity(`Checked ${room.label || room.modelId} at ${args.lens} mm: ${result.reason}`);
-        return report;
+        return checkCandidate(room, {lens: args.lens, move, travel: args.slide,
+          captured: requireSightlines || args.requireSightlines === true});
+      }
+      case "retry_candidate": {
+        const parent = candidates.get(args.candidate);
+        if (!parent?.room || !parent.staging?.mark || !parent.staging.aim)
+          throw Error("Use a tested room candidate with valid staging.");
+        const {adjustment, meters} = args;
+        if (!["back_up", "shift_left", "shift_right"].includes(adjustment) ||
+            !Number.isFinite(meters) || meters < .15 || meters > 2)
+          throw Error("Choose a supported camera adjustment between 0.15 and 2 meters.");
+        const origin = parent.setup?.mark ?? parent.staging.mark;
+        const {aim} = parent.staging;
+        const dx = aim[0] - origin[0], dz = aim[1] - origin[1];
+        const distance = Math.hypot(dx, dz);
+        if (distance < .01) throw Error("The camera is too close to its aim to define a direction.");
+        const direction = adjustment === "back_up" ? [-dx, -dz]
+          : adjustment === "shift_left" ? [dz, -dx] : [-dz, dx];
+        const trial = {...parent.staging,
+          mark: origin.map((point, i) => point + meters * direction[i] / distance)};
+        const signature = JSON.stringify([parent.report.model, parent.report.room, parent.report.lens,
+          parent.report.move, parent.report.requested, trial.mark, trial.aim, parent.captured]);
+        if (retried.has(signature) || retried.size >= 6)
+          throw Error("This adjustment was checked already or the run reached its six-retry limit.");
+        retried.add(signature);
+        return checkCandidate(parent.room, {lens: parent.report.lens, move: parent.report.move,
+          travel: parent.report.requested, captured: parent.captured, trial, parent: args.candidate,
+          adjustment: adjustment.replaceAll("_", " ") + " " + meters + " m"});
       }
       case "revise_current_shot": {
         if (scope && !scope.has(currentModel)) throw Error("The open room is outside the shortlist.");
@@ -299,7 +384,8 @@ export async function runAgent(brief, {activity, apply, lockedLens = null, locke
         const result = revise({distance, focal: lens, cameraHeight, objective: args.objective, requireSightlines});
         const id = "shot-" + (candidates.size + 1);
         const report = {id, model: currentModel, room: current.roomId, move: current.moveKind, requested: distance, lens, cameraHeight: result.setup?.cameraHeight ?? cameraHeight, travel: result.setup?.travel ?? null, outcome: result.reason,
-          ceiling: result.ceiling, clearanceMargin: result.clearanceMargin, sightlinesSampled: result.sightlinesSampled};
+          ceiling: result.ceiling, clearanceMargin: result.clearanceMargin, framingMargin: result.framingMargin,
+          sightlinesSampled: result.sightlinesSampled};
         candidates.set(id, {room: null, setup: result.setup, report});
         activity("Checked the open room: " + result.reason);
         return report;
@@ -327,11 +413,24 @@ export async function runAgent(brief, {activity, apply, lockedLens = null, locke
   }
 
   function publishAlternatives() {
-    onAlternatives(candidateReports().flatMap(report => {
-      const item = candidates.get(report.id);
-      return report.status === "qualifies" && item.room && item !== proposal
-        ? [{id: report.id, room: item.room, setup: item.setup}] : [];
-      }));
+    const ranking = candidateReports();
+    const reports = new Map(ranking.map(report => [report.id, report]));
+    const options = [];
+    const seenRooms = new Set();
+    const candidatesInOrder = [...new Set([proposal, ...ranking.map(report => candidates.get(report.id))])];
+    for (const item of candidatesInOrder) {
+      if (!item) continue;
+      const report = reports.get(item.report.id);
+      const room = key(report.model, report.room ?? null);
+      if (report.status !== "qualifies" || seenRooms.has(room) || reopenFailedRooms.has(room)) continue;
+      seenRooms.add(room);
+      options.push({id: report.id, room: item.room, setup: item.setup, report, opened: item === proposal});
+      if (options.length === 3) break;
+    }
+    onAlternatives(options.filter(item => item.room && !item.opened).slice(0, proposal ? 2 : 3));
+    const tradeoff = ranking.filter(item => item.status === "fallback").sort((a, b) =>
+      a.unmet.length - b.unmet.length || a.travelDifference - b.travelDifference)[0];
+    onResults({options, tradeoff: options.length ? null : tradeoff});
   }
 
   function finishIncomplete(reason) {
@@ -365,20 +464,23 @@ export async function runAgent(brief, {activity, apply, lockedLens = null, locke
       if (proposal && allowImport) {
         const ranked = candidateReports().filter(candidate => candidate.status === "qualifies")
           .map(candidate => candidates.get(candidate.id));
-        const attemptedModels = new Set();
+        const failedDownloads = new Set();
+        const attemptedRooms = new Set();
         proposal = undefined;
         for (const item of new Set([preferred, ...ranked])) {
           const model = item.room?.modelId;
-          if (model && attemptedModels.has(model)) continue;
+          const roomKey = key(model, item.room?.roomId ?? null);
+          if (model && (failedDownloads.has(model) || attemptedRooms.has(roomKey))) continue;
           if (model) {
-            attemptedModels.add(model);
             try {
               await prepareCapture(model, item.room.matterpakAvailable === true);
             } catch (error) {
+              failedDownloads.add(model);
               captureFailure = true;
               activity(`Could not prepare scan ${model}: ${error.message}`);
               continue;
             }
+            attemptedRooms.add(roomKey);
           }
           try {
             await apply(item.room, item.setup, Boolean(model));
@@ -386,21 +488,24 @@ export async function runAgent(brief, {activity, apply, lockedLens = null, locke
             break;
           } catch (error) {
             if (error.code !== "capture-unavailable") throw error;
+            reopenFailedRooms.add(roomKey);
             captureFailure = true;
-            activity(`Could not display scan ${model}: ${error.message}`);
+            activity(`Could not display ${item.room?.label || model}: ${error.message}`);
+            if (attemptedRooms.size >= 3) break;
           }
         }
       } else if (proposal) {
         await apply(proposal.room, proposal.setup);
       }
-      if (proposal) activity(`Opened ${proposal.report.id} in the editor.`);
+      const openedLabel = proposal?.report.label || proposal?.report.model || "the current room";
+      if (proposal) activity(`Opened ${proposal.report.id} in ${openedLabel}.`);
       publishEvidence();
       publishAlternatives();
       const summary = response.content || "The investigation finished.";
       if (captureFailure && !proposal) return summary +
         " None of the attempted captured scenes could open. Your editor was kept. Review the tested setups and import details below.";
       if (captureFailure && proposal) return summary +
-        ` Opened ${proposal.report.id} after a higher-priority scan could not supply its MatterPak.`;
+        ` Opened ${proposal.report.id} in ${openedLabel} after a higher-priority captured preview could not open.`;
       return automatic && proposal ? summary + ` Opened ${proposal.report.id}, the top qualifying technical match.` : summary;
     }
     if (calls.length > 4) return finishIncomplete("The model requested too many tools at once.");
@@ -408,7 +513,10 @@ export async function runAgent(brief, {activity, apply, lockedLens = null, locke
     for (const call of calls) {
       let result;
       try {
-        result = await execute(call.function.name, JSON.parse(call.function.arguments));
+        const args = JSON.parse(call.function.arguments);
+        if (!args || typeof args !== "object" || Array.isArray(args))
+          throw Error("Tool arguments must be a JSON object.");
+        result = await execute(call.function.name, args);
       } catch (error) {
         result = {error: error.message};
         activity(`${call.function.name}: ${error.message}`);

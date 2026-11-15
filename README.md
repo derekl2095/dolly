@@ -100,6 +100,14 @@ sightlines in the selected room before relying on a setup.
 Set SCOUT_MODEL_URL to the provider's Chat Completions endpoint and
 SCOUT_MODEL_NAME to a tool-capable model. Set SCOUT_MODEL_KEY if required.
 Keep the key in the server environment. Start or restart app.py after configuring it.
+For the OpenAI API, the existing adapter accepts these settings.
+
+    SCOUT_MODEL_URL=https://api.openai.com/v1/chat/completions
+    SCOUT_MODEL_NAME=gpt-5.4-mini
+
+Set `SCOUT_MODEL_KEY` privately in the server environment before starting
+the app. See [GPT-5.4 mini](https://developers.openai.com/api/docs/models/gpt-5.4-mini).
+
 The agent sends the shot brief and the CoStar and room evidence returned by its
 tools to the configured provider. Use a provider permitted to receive that data.
 Inside **Scout with a shot brief**, optionally lock the lens and choose whether
