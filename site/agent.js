@@ -1,5 +1,5 @@
-import {actorMarks, loadShot, outlineMeasurements} from "./room-state.js";
-import {compareCapturedRooms} from "./compare.js";
+import {actorMarks, loadShot, outlineMeasurements} from "./room-state.js?v=spatial-plan";
+import {compareCapturedRooms} from "./compare.js?v=room-polish";
 
 const definitions = [
   ["search_locations", "Search CoStar for properties including leads with no linked scan. Use confirmedOnly to search scans with an audited outline or a local room. Use importedOnly for local rooms only.", {query: {type: "string"}, city: {type: ["string", "null"]}, category: {type: ["string", "null"]}, importedOnly: {type: "boolean"}, confirmedOnly: {type: "boolean"}}],
@@ -281,7 +281,7 @@ export async function runAgent(brief, {activity, apply, lockedLens = null, locke
 
   async function baselineForRoom(room) {
     if (!autoBaseline || lockedRoom || candidates.size ||
-        !actorMarks(room, loadShot(room)).every(Boolean)) return null;
+        actorMarks(room, loadShot(room)).filter(Boolean).length < 2) return null;
     const move = lockedMove ?? "slide";
     const lens = lockedLens ?? current?.lens ?? 35;
     const travel = move === "static" ? 0 : (targetTravel ?? Math.max(minimumTravel, .7));

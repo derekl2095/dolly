@@ -14,7 +14,9 @@ export function sightlineCheck(THREE, mesh, actors, cameraHeight) {
     for (const t of [0, .25, .5, .75, 1]) {
       const [x, z] = pointAt(t);
       const origin = new THREE.Vector3(x, cameraHeight, z);
-      for (const [index, [ax, az]] of actors.entries()) {
+      for (const [index, actor] of actors.entries()) {
+        if (!actor) continue;
+        const [ax, az] = actor;
         const direction = new THREE.Vector3(ax, 1.49, az).sub(origin);
         ray.far = direction.length() - .14;
         if (ray.far <= ray.near) continue;

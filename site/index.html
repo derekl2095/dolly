@@ -3,7 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Location Scout</title>
+<title>Dolly</title>
+<link rel="icon" href="dolly.svg" type="image/svg+xml">
 <style>
 :root {color-scheme:dark;font:16px system-ui;background:#181b1c;color:#f1efe8}
 body {margin:0} main {max-width:1100px;margin:auto;padding:clamp(20px,5vw,60px)}
@@ -54,12 +55,14 @@ select {max-width:100%} canvas {width:100%;display:block;margin-top:12px;backgro
 #transport input[type="range"] {width:90px;padding:0}
 @media(max-width:700px){.layout{grid-template-columns:1fr}}
 </style>
-<link rel="stylesheet" href="scout-studio.css?v=visible-actors">
+<link rel="stylesheet" href="scout-studio.css?v=dolly-daylight">
 </head>
 <body><main>
 <header class="studio-header">
-<a class="studio-brand" href="./">Scout<span>.</span></a>
-<nav aria-label="Workspace"><a href="#scouting">Locations</a><a href="#room-title">Shot editor</a></nav>
+<a class="studio-brand" href="./"><img src="dolly.svg" alt="" width="36" height="36">Dolly</a>
+<nav aria-label="Workspace">
+<button id="back-to-results" type="button"><span class="to-results">← Results</span><span class="to-shot">Return to shot</span></button>
+</nav>
 <details id="projects">
 <summary>Projects</summary>
 <div class="project-controls">
@@ -98,9 +101,10 @@ select {max-width:100%} canvas {width:100%;display:block;margin-top:12px;backgro
 </header>
 <div id="workspace" class="layout">
 <section class="scouting" id="scouting" aria-labelledby="scouting-title">
+<button id="collapse-scouting" class="sidebar-toggle" type="button" aria-controls="scouting" aria-expanded="true" aria-label="Collapse locations sidebar" title="Collapse locations sidebar">−</button>
 <div class="scouting-hero">
 <div class="scouting-intro">
-<h1 id="scouting-title">Location<br class="intro-break"> Scout<span>.</span></h1>
+<h1 id="scouting-title">Dolly<span>.</span></h1>
 </div>
 <form id="scout-search"><input name="q" aria-label="Search CoStar properties" maxlength="240" placeholder="Showroom with storefront glass">
 <label>City <select name="city"><option value="">Any city</option><option>Houston</option><option>Los Angeles</option></select></label>
@@ -185,9 +189,11 @@ select {max-width:100%} canvas {width:100%;display:block;margin-top:12px;backgro
 <p id="room-location" hidden></p>
 <p id="room-status" role="status"></p>
 </div>
-<button id="back-to-results" type="button">Back to results</button>
-<button id="toggle-scouting" type="button" aria-controls="scouting" aria-expanded="true">Hide sidebar</button>
-<label id="room-picker" hidden>Room <select aria-label="Imported room"></select></label></div>
+<div class="room-actions">
+<button id="expand-scouting" type="button" aria-controls="scouting" aria-expanded="false" hidden>Show sidebar</button>
+<label id="room-picker" hidden>Room <select aria-label="Imported room"></select></label>
+</div>
+</div>
 <div id="shot-grid"><div class="preview-column"><div id="viewport" hidden>
 <div id="camera-hud" aria-hidden="true"><span id="shot-time">00:00.0</span><span id="shot-lens">35 mm</span></div>
 </div>
@@ -205,46 +211,82 @@ select {max-width:100%} canvas {width:100%;display:block;margin-top:12px;backgro
 <label>Travel <input id="travel" type="range" min="0" max="4" step="any" value=".7"><output id="distance">0.70 m</output></label>
 <label>Duration (seconds) <input id="shot-duration" type="range" min=".5" max="30" step=".1"><output id="duration-value"></output></label>
 <label>Sensor width <input id="sensor-width" type="range" min="8" max="65" step=".01"><output id="sensor-value"></output></label>
-<label>Camera height <input id="camera-height" type="range" min=".15" max="4" step=".01"><output id="height-value"></output></label>
 <label>Rig radius <input id="rig-radius" type="range" min=".05" max="1.5" step=".01"><output id="rig-value"></output></label>
 </div>
 <div class="camera-options">
 <label><input type="checkbox" id="keep-mark" checked> Keep camera mark</label>
-<label><input type="checkbox" id="check-scan"> Require sampled mesh sightlines</label>
 <label><input type="checkbox" id="show-marks"> Show actor stand-ins</label>
-<button id="fit" type="button">Fit slide to room</button>
+</div>
+<div class="visibility-control" id="visibility-control" hidden>
+<label><input type="checkbox" id="check-scan" aria-describedby="sightline-help" disabled> Avoid blocked actor views</label>
+<p id="sightline-help" class="planning-help"></p>
 </div>
 </details>
 </div>
 <p id="render-status" role="status"></p>
 </div>
 <div class="blocking">
-<canvas id="plan" width="720" height="500" hidden tabindex="0" aria-label="Scaled room plan" aria-describedby="plan-instructions"></canvas>
-<div class="plan-view-tools" hidden>
-<button id="pan-plan" type="button" aria-pressed="false">Pan</button>
-<button id="zoom-plan-out" type="button" aria-label="Zoom out on plan">−</button>
+<div class="plan-canvas-wrap">
+<canvas id="plan" width="720" height="500" hidden tabindex="0" aria-label="Interactive 3D room plan" aria-describedby="plan-instructions"></canvas>
+<div class="plan-zoom" hidden>
 <button id="zoom-plan-in" type="button" aria-label="Zoom in on plan">+</button>
+<button id="zoom-plan-out" type="button" aria-label="Zoom out on plan">−</button>
+</div>
+</div>
+<div class="plan-view-tools" hidden>
+<button id="plan-view-mode" type="button" aria-pressed="true">3D view</button>
+<button id="orbit-plan" type="button" aria-label="Orbit view" title="Orbit view" aria-pressed="false">⤾</button>
+<button id="pan-plan" type="button" aria-label="Pan view" title="Pan view" aria-pressed="false">
+<svg aria-hidden="true" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M8 12V6a1.3 1.3 0 0 1 2.6 0v4.2-6a1.3 1.3 0 0 1 2.6 0v6-4.3a1.3 1.3 0 0 1 2.6 0v5-2.7a1.3 1.3 0 0 1 2.6 0v6.7a5.9 5.9 0 0 1-5.9 6H12a5.6 5.6 0 0 1-4.5-2.4L4.3 14a1.5 1.5 0 0 1 2.1-2.1L8 13.4"/></svg>
+</button>
 <button id="reset-plan-view" type="button">Reset view</button>
 </div>
 <p id="rig-width" hidden></p>
 <div id="plan-tools" hidden>
-<button id="draw-curve" type="button" aria-pressed="false">Draw curve</button>
-<label>Place <select id="place-mark"><option value="camera">Camera center</option><option value="start">Camera start</option><option value="end">Camera end</option><option value="aim">Camera aim</option><option value="0">Actor 1</option><option value="1">Actor 2</option></select></label>
-<button id="center-aim" type="button">Aim at actors</button>
-<button id="mark-obstacle" type="button" aria-pressed="false">Mark furniture</button>
-<button id="undo-obstacle" type="button" disabled>Undo last mark</button>
-<p id="plan-instructions">Drag A1 or A2 to move an actor. Click empty space to place the selected mark.</p>
+<div class="plan-heights">
+<div class="height-field">
+<label for="camera-height">Path height</label>
+<input id="camera-height" type="range" min=".15" max="4" step="any">
+<label class="height-number"><input id="path-height-value" type="number" min=".15" max="4" step="any" aria-label="Exact path height in meters"><span aria-hidden="true">m</span></label>
 </div>
+<div class="height-field">
+<label for="aim-height-slider">Aim height</label>
+<input id="aim-height-slider" type="range" min="0" max="4" step="any">
+<label class="height-number"><input id="aim-elevation" type="number" min="0" max="100" step="any" aria-label="Exact aim height in meters"><span aria-hidden="true">m</span></label>
+</div>
+</div>
+<div class="blocking-controls">
+<label>Place <select id="place-mark"><option value="camera">Camera center</option><option value="start">Camera start</option><option value="end">Camera end</option><option value="aim">Camera aim</option><option value="0">Actor 1</option><option value="1">Actor 2</option></select></label>
+<button id="add-actor" type="button">Add actor</button>
+<button id="draw-curve" type="button" aria-pressed="false">Draw path</button>
+<button id="center-aim" type="button">Aim at actors</button>
+</div>
+</div>
+<div class="furniture-tools blocking-controls" hidden>
+<button id="mark-obstacle" type="button" aria-pressed="false">Mark furniture</button>
+<div id="furniture-sizing" hidden>
+<label>Furniture <select id="furniture-selection"></select></label>
+<label>Height (m) <input type="number" id="furniture-height" min="0" max="12" step="any"></label>
+<button id="delete-furniture" type="button">Delete selected</button>
+</div>
+</div>
+<p id="plan-instructions" role="status" hidden>Drag empty space to orbit. Drag a handle to move it.</p>
 </div></div>
 <div class="shot-evidence"><p id="clearance" role="status"></p><p id="ceiling" role="status"></p><p id="framing" role="status"></p><p id="sightline" role="status"></p>
+<details id="fit-planning" hidden>
+<summary>Find a move that fits</summary>
+<p class="planning-help">Checks clearance and framing. Dolly can shorten the move or shift it if the camera mark is unlocked.</p>
+<button id="fit" type="button">Find fitting move</button>
+</details>
 <div id="sightline-actions" hidden>
 <button id="view-obstruction" type="button">Jump to blocked view</button>
-<button id="fit-sightlines" type="button">Find a clear move</button>
-</div></div>
+</div>
+<p id="revision" role="status"></p>
+</div>
 <form id="direction" hidden>
 <input aria-label="Camera direction" placeholder="Try a 1.5 m slide" maxlength="160" required>
 <button>Replan shot</button>
-</form><p id="revision" role="status"></p>
+</form>
 <details class="capture-tools"><summary>Room data and alignment</summary>
 <p id="room-geometry" hidden></p>
 <details id="measured-room" hidden>
@@ -299,4 +341,4 @@ select {max-width:100%} canvas {width:100%;display:block;margin-top:12px;backgro
 </div>
 </main>
 <script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js","three-mesh-bvh":"https://cdn.jsdelivr.net/npm/three-mesh-bvh@0.8.3/build/index.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"}}</script>
-<script type="module" src="scout.js?v=mesh-gap9"></script></body></html>
+<script type="module" src="scout.js?v=dolly-daylight"></script></body></html>

@@ -191,7 +191,8 @@ class ScoutServer(ThreadingHTTPServer):
                     except (OSError, ValueError, KeyError, AttributeError):
                         pass
                 rooms.append(data)
-        return rooms
+        return [room for room in rooms
+                if not re.fullmatch(r"void(?:\s+\d+)?", str(room.get("label", "")).strip(), re.I)]
 
     def room(self, model, room_id=None):
         return next((room for room in self.rooms(model)
