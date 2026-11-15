@@ -1,11 +1,11 @@
-import {maxCurvePoints, readShotExport, roundStroke, tracePath, checkWallClearance} from "./path.js?v=staging-controls";
-import {deleteProject, parseProjectArchive, projectArchiveMaxBytes, readProjects, writeProject} from "./projects.js?v=staging-controls";
+import {isClosedPath, maxCurvePoints, maxDrawnTravel, readShotExport, roundStroke, tracePath, checkWallClearance} from "./path.js?v=drawn-loops";
+import {deleteProject, parseProjectArchive, projectArchiveMaxBytes, readProjects, writeProject} from "./projects.js?v=drawn-loops";
 import {defaultFurnitureHeight, furnitureHeight, loadObstacles, maxActors, outlineMeasurements, roomKey, standIn, actorHeight, defaultActorHeight, stagingFingerprint, savedStagingFingerprint} from "./room-state.js?v=furniture-sightlines";
 import {planProjection} from "./plan-projection.js";
 import {capturedSpaceLabel, cleanPropertyDescription, isVoidRoom, listedArea, spaceLabel} from "./location-labels.js?v=dolly";
 import {briefLocationFilters, briefSuggestions, requestsCameraPan, requestsNaturalLight, reviewShotBrief, runAgent} from "./agent.js?v=furniture-sightlines";
 import {compareCapturedRooms} from "./compare.js?v=furniture-sightlines";
-import {openMesh, closeMesh, currentShot, currentShotCanCheckSightlines, planCurrentShot, applyCurrentShot} from "./mesh.js?v=window-frame-review";
+import {openMesh, closeMesh, currentShot, currentShotCanCheckSightlines, planCurrentShot, applyCurrentShot} from "./mesh.js?v=drawn-loops";
 import {loadLocationMap, resetLocationMap} from "./location-map.js?v=all-locations";
 
 const form = document.querySelector("#scout-search");
@@ -341,7 +341,7 @@ function setDrawing(enabled) {
   drawCurve.textContent = enabled ? "Cancel path" : "Draw path";
   if (enabled) {
     setPlanView(false);
-    instructions.textContent = "Top view · Drag a path up to 4 m. Release to play.";
+    instructions.textContent = "Draw in Top view. Finish near the start to close a loop.";
     canvas.scrollIntoView({block: "nearest"});
   }
   drawPlan?.(pose);
@@ -478,8 +478,10 @@ function shotHandles(shot) {
   if (!shot) return [];
   return [
     {mark: "camera", position: shot.center, height: shot.cameraHeight, label: "CAM"},
-    {mark: "start", position: shot.from, height: shot.cameraHeight, label: "START"},
-    {mark: "end", position: shot.to, height: shot.cameraHeight, label: "END"},
+    ...(shot.pathPoints && isClosedPath(shot.pathPoints)
+      ? [{mark: "start", position: shot.from, height: shot.cameraHeight, label: "START / END"}]
+      : [{mark: "start", position: shot.from, height: shot.cameraHeight, label: "START"},
+        {mark: "end", position: shot.to, height: shot.cameraHeight, label: "END"}]),
     {mark: "aim", position: [shot.tx, shot.tz], height: shot.aimHeight, label: "AIM"},
     ...shot.actors.flatMap((position, index) => position
       ? [{mark: String(index), position, height: 0, label: `A${index + 1}`}] : []),
@@ -659,12 +661,14 @@ canvas.addEventListener("pointerup", event => {
   if (stroke && event.pointerId === strokePointer) {
     const path = roundStroke([...stroke, toWorld(event, pose?.cameraHeight)]);
     setDrawing(false);
-    if (!tracePath(path)) {
-      instructions.textContent = "Draw a path between 1 cm and 4 m.";
+    const route = tracePath(path);
+    if (!route) {
+      instructions.textContent = `Draw a path between 1 cm and ${maxDrawnTravel} m.`;
       return;
     }
     canvas.dispatchEvent(new CustomEvent("drawcamera", {detail: path}));
-    instructions.textContent = "Path set. Switch to 3D view to inspect its height.";
+    instructions.textContent = route.closed ? "Loop set. Drag START / END to move where it begins and finishes."
+      : "Path set. Switch to 3D view to inspect its height.";
     return;
   }
   if (markDrag?.pointer === event.pointerId) {
@@ -687,6 +691,7 @@ canvas.addEventListener("pointerup", event => {
     obstacles.push({min, max, height: defaultFurnitureHeight, name: `marked furniture ${number}`});
     setMarking(false);
     syncFurnitureSizing(obstacles.length - 1);
+    furnitureSizing.closest("details").open = true;
     publishObstacles();
     instructions.textContent = "Furniture added. Set its height to match the object.";
   } else {
@@ -1167,6 +1172,13 @@ function renderRoom(room) {
       context.lineWidth = stroke ? 4 : 3;
       context.lineJoin = context.lineCap = "round";
       context.stroke();
+      if (stroke) {
+        context.beginPath();
+        context.arc(...view.project(stroke[0], height), 8, 0, 2 * Math.PI);
+        context.strokeStyle = "#f9ddae";
+        context.lineWidth = 2;
+        context.stroke();
+      }
       if (planIs3D && pose) {
         context.beginPath();
         for (const point of [path[0], path.at(-1)]) {

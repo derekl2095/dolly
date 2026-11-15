@@ -1,7 +1,7 @@
 import {mountDaylight} from "./daylight.js?v=window-frame-review";
 import {alignMesh, furnitureSightlineCheck, sightlineCheck} from "./sightlines.js?v=furniture-sightlines";
 import {actorCenter, actorHeight, defaultActorHeight, actorMarks, checkCameraHeight, furnitureHeight, loadShot, maxActors, roomKey, shotSettings, standIn} from "./room-state.js?v=staging-controls";
-import {cameraMoveAxis, checkFraming, checkRigClearance, easedPathFraction, editorShotState, findSlide, interpretDirection, pathFromEndpoints, slideEndpoints, timeFractionAtPath, tracePath} from "./path.js?v=staging-controls";
+import {cameraMoveAxis, checkFraming, checkRigClearance, easedPathFraction, editorShotState, findSlide, interpretDirection, maxDrawnTravel, pathFromEndpoints, slideEndpoints, timeFractionAtPath, tracePath} from "./path.js?v=drawn-loops";
 
 const viewport = document.querySelector("#viewport");
 const status = document.querySelector("#render-status");
@@ -266,7 +266,7 @@ function mount(THREE, room, mesh, textures, release, captured = false) {
   updateStandIns();
   const fill = new THREE.HemisphereLight(0xffffff, 0xb7a28f, 2.3);
   scene.add(marks, fill);
-  showMarks.checked = saved.showStandIns === true && actors.filter(Boolean).length >= 2;
+  showMarks.checked = saved.showStandIns === true && actors.some(Boolean);
   let aligned = captured && room.matterpakAlignmentVerified === true;
 
   const midpoint = room.outline.reduce(([x, z], [px, pz]) => [x + px, z + pz], [0, 0])
@@ -441,7 +441,7 @@ function mount(THREE, room, mesh, textures, release, captured = false) {
   }
 
   function render() {
-    const distance = Number(travel.value);
+    const distance = curve?.travel ?? Number(travel.value);
     const canFit = !curve && hasCast() && moveKind.value !== "static" && distance > 0;
     fitPlanning.hidden = !canFit;
     const [from, to] = endpoints(distance);
@@ -506,7 +506,7 @@ function mount(THREE, room, mesh, textures, release, captured = false) {
     document.querySelector("#rig-value").textContent = rig.value + " m";
     document.querySelector("#sensor-value").textContent = sensor.value + " mm";
     document.querySelector("#focal").textContent = focal + " mm";
-    document.querySelector("#distance").textContent = Number(travel.value).toFixed(2) + " m";
+    document.querySelector("#distance").textContent = distance.toFixed(2) + " m";
   }
 
   function stop() {
@@ -628,13 +628,14 @@ function mount(THREE, room, mesh, textures, release, captured = false) {
   plan.addEventListener("drawcamera", event => {
     const path = tracePath(event.detail);
     if (!path) {
-      revision.textContent = "Draw a camera path between 1 cm and 4 m. The previous shot was kept.";
+      revision.textContent = `Draw a camera path between 1 cm and ${maxDrawnTravel} m. The previous shot was kept.`;
       return;
     }
     if (reviewing) showAlignmentReview(false);
     timeline.value = "0";
     applyCurve(path);
-    revision.textContent = "Playing the drawn curve. Review clearance and framing below.";
+    revision.textContent = path.closed ? "Playing the loop. Review clearance and framing below."
+      : "Playing the drawn curve. Review clearance and framing below.";
     play();
   }, options);
   plan.addEventListener("choosecamera", event => {
@@ -713,15 +714,16 @@ function mount(THREE, room, mesh, textures, release, captured = false) {
     const {which, point} = event.detail;
     if (curve) {
       const points = curve.points.slice();
-      points[which === "start" ? 0 : points.length - 1] = point;
+      if (curve.closed || which === "start") points[0] = point;
+      if (curve.closed || which === "end") points[points.length - 1] = point;
       const path = tracePath(points);
       if (!path) {
-        revision.textContent = "The updated curve must be between 1 cm and 4 m.";
+        revision.textContent = `The updated curve must be between 1 cm and ${maxDrawnTravel} m.`;
         return;
       }
       timeline.value = which === "start" ? "0" : "1000";
       applyCurve(path);
-      revision.textContent = "Curve " + which + " updated.";
+      revision.textContent = path.closed ? "Loop start and finish updated." : "Curve " + which + " updated.";
       return;
     }
     const [from, to] = endpoints(Number(travel.value));
@@ -866,7 +868,7 @@ function mount(THREE, room, mesh, textures, release, captured = false) {
         ...actors.map((_, index) => actorHeight(setup.actorHeights, index)));
       updateStandIns();
     }
-    if (setup.showStandIns === true && hasCast()) showMarks.checked = true;
+    if (setup.showStandIns === true && actors.some(Boolean)) showMarks.checked = true;
     checkedTravel = undefined;
     lens.value = pose.lens;
     if (Number.isFinite(setup.rigRadius)) rig.value = setup.rigRadius;
@@ -930,7 +932,7 @@ function mount(THREE, room, mesh, textures, release, captured = false) {
     render();
   }, options);
   exportShot.addEventListener("click", () => {
-    const distance = Number(travel.value);
+    const distance = curve?.travel ?? Number(travel.value);
     const [start, end] = endpoints(distance);
     const {margin, feature} = clearance(start, end);
     const sampledMesh = aligned && hasCast();

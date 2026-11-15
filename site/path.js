@@ -104,6 +104,11 @@ export function pathFromEndpoints(start, end) {
 }
 
 export const maxCurvePoints = 512;
+export const maxDrawnTravel = 30;
+
+export function isClosedPath(points) {
+  return points.length > 2 && points[0].every((value, axis) => value === points.at(-1)[axis]);
+}
 
 export function tracePath(points) {
   if (!Array.isArray(points) || points.length < 2 || points.length > maxCurvePoints ||
@@ -118,10 +123,12 @@ export function tracePath(points) {
     segments.push({from, to, length, start: travel});
     travel += length;
   }
-  if (travel < .01 || travel > 4 + 1e-8) return null;
+  if (travel < .01 || travel > maxDrawnTravel + 1e-8) return null;
   return {
-    points, segments, travel,
+    points, segments, travel, closed: isClosedPath(points),
     at(fraction) {
+      if (fraction <= 0) return points[0].slice();
+      if (fraction >= 1) return points.at(-1).slice();
       const distance = Math.max(0, Math.min(1, fraction)) * travel;
       const segment = segments.find(item => distance <= item.start + item.length) ?? segments.at(-1);
       const t = (distance - segment.start) / segment.length;
@@ -132,6 +139,12 @@ export function tracePath(points) {
 
 export function roundStroke(points) {
   if (points.length < 3) return points;
+  const start = points[0];
+  const distanceFromStart = point => Math.hypot(point[0] - start[0], point[1] - start[1]);
+  // Snap the finish to the start only after the stroke has traveled away from it.
+  if (distanceFromStart(points.at(-1)) <= .12 && points.some(point => distanceFromStart(point) >= .3)) {
+    points = [...points.slice(0, -1), start];
+  }
   const rounded = [points[0]];
   for (let index = 1; index < points.length; index++) {
     const from = points[index - 1], to = points[index];
@@ -271,16 +284,16 @@ export function readShotExport(text) {
       (!curve || shot.moveKind !== "curve" ||
        !shot.start.every((value, axis) => value === curve.points[0][axis]) ||
        !shot.end.every((value, axis) => value === curve.points.at(-1)[axis]))) {
-    throw Error("The exported curve is invalid or exceeds 4 m.");
+    throw Error(`The exported curve is invalid or exceeds ${maxDrawnTravel} m.`);
   }
   const path = curve
     ? {pathPoints: curve.points, mark: curve.at(.5), travel: curve.travel}
     : pathFromEndpoints(shot.start, shot.end);
-  if (path.travel > 4 + 1e-8) throw Error("The exported move is longer than 4 m.");
+  if (!curve && path.travel > 4 + 1e-8) throw Error("The exported move is longer than 4 m.");
   const moveKind = curve ? "curve" : path.travel < 1e-8 ? "static"
     : ["slide", "push", "pull"].includes(shot.moveKind) ? shot.moveKind : "custom";
   return {modelId: shot.modelId, roomId: shot.roomId, setup: {
-    ...path, travel: moveKind === "static" ? 0 : Math.min(path.travel, 4),
+    ...path, travel: moveKind === "static" ? 0 : path.travel,
     moveKind, aim: shot.aim, aimHeight: shot.aimHeight, aimLocked: shot.aimLocked !== false, actors: shot.actors, actorHeights: shot.actorHeights,
     obstacles: shot.obstacles, lens: shot.focalLengthMm, cameraHeight: shot.cameraHeight,
     sensorWidthMm: shot.sensorWidthMm, rigRadius: shot.rigRadius, durationSeconds: shot.durationSeconds,

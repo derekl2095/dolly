@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import {existsSync, readFileSync} from "node:fs";
 import test from "node:test";
-import {checkFraming, editorShotState, readShotExport, roundStroke, slideEndpoints, tracePath} from "./path.js";
+import {checkFraming, editorShotState, maxDrawnTravel, readShotExport, roundStroke, slideEndpoints, tracePath} from "./path.js";
 import {savedStagingFingerprint, stagingFingerprint} from "./room-state.js";
 import {solveShot} from "./solver.js";
 import {compareRooms} from "./compare.js";
+import {parseProjectArchive} from "./projects.js";
 import {planProjection} from "./plan-projection.js";
 import {capturedSpaceLabel, cleanPropertyDescription, listedArea, spaceLabel} from "./location-labels.js";
 
@@ -56,7 +57,31 @@ test("a drawn curve plays by distance and survives a shot export", () => {
   assert.deepEqual(setup.obstacles, payload.obstacles);
   assert.equal(setup.travel, curve.travel);
   assert.throws(() => readShotExport(JSON.stringify({...payload, end: [1, 1]})), /curve is invalid/);
-  assert.equal(tracePath([[0, 0], [0, 3], [1, 0]]), null);
+  assert.equal(tracePath([[0, 0], [0, maxDrawnTravel + 1]]), null);
+});
+
+test("a full drawn loop closes, traverses the interior waypoints and reopens from exports", () => {
+  const pathPoints = roundStroke([[0, 0], [2, 0], [2, 2], [0, 2], [.05, .04]]);
+  const loop = tracePath(pathPoints);
+  assert.equal(loop.closed, true);
+  assert.ok(loop.travel > 4);
+  assert.deepEqual(loop.at(0), loop.at(1));
+  assert.ok(loop.at(.5).every(value => value > 1.7));
+  assert.equal(tracePath(roundStroke([[0, 0], [2, 0], [2, 2], [.2, .2]])).closed, false);
+
+  const payload = {schemaVersion: 1, units: "meters", interpolation: "smoothstep",
+    modelId: "fixture", moveKind: "curve", start: loop.at(0), end: loop.at(1),
+    pathPoints, aim: [1, 1], actors: [[.8, 1], [1.2, 1]], actorHeights: [1.7, 1.8],
+    focalLengthMm: 35, cameraHeight: 1.42, sensorWidthMm: 36, rigRadius: .25,
+    durationSeconds: 6, aspect: [16, 9], obstacles: []};
+  const {setup} = readShotExport(JSON.stringify(payload));
+  assert.deepEqual(setup.pathPoints, pathPoints);
+  assert.equal(setup.travel, loop.travel);
+  assert.deepEqual(setup.actorHeights, payload.actorHeights);
+  const project = {title: "Loop", revisions: [], selection: {modelId: "fixture", shot: setup}};
+  assert.deepEqual(parseProjectArchive(JSON.stringify({version: 1, project})).selection.shot.pathPoints, pathPoints);
+  assert.throws(() => readShotExport(JSON.stringify({...payload, moveKind: "custom",
+    pathPoints: undefined, end: [5, 0]})), /longer than 4 m/);
 });
 
 function rectangle({width = 8, depth = 6, height = 3, camera, actors, slideAxis = [1, 0], aim} = {}) {
