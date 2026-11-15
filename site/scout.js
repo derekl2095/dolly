@@ -5,7 +5,7 @@ import {planProjection} from "./plan-projection.js";
 import {capturedSpaceLabel, cleanPropertyDescription, isVoidRoom, listedArea, spaceLabel} from "./location-labels.js?v=dolly";
 import {briefLocationFilters, briefSuggestions, requestsCameraPan, requestsNaturalLight, reviewShotBrief, runAgent} from "./agent.js?v=ranked-rooms";
 import {compareCapturedRooms} from "./compare.js?v=dolly-catalog";
-import {openMesh, closeMesh, currentShot, planCurrentShot, applyCurrentShot} from "./mesh.js?v=shot-revision";
+import {openMesh, closeMesh, currentShot, currentShotCanCheckSightlines, planCurrentShot, applyCurrentShot} from "./mesh.js?v=dolly-planner";
 import {addMapLocations, resetLocationMap} from "./location-map.js?v=location-polish";
 
 const form = document.querySelector("#scout-search");
@@ -215,6 +215,7 @@ const deleteFurniture = document.querySelector("#delete-furniture");
 const instructions = document.querySelector("#plan-instructions");
 const tools = document.querySelector("#plan-tools");
 const drawCurve = document.querySelector("#draw-curve");
+const centerAim = document.querySelector("#center-aim");
 const panPlan = document.querySelector("#pan-plan");
 const planViewTools = panPlan.parentElement;
 const planZoomTools = document.querySelector(".plan-zoom");
@@ -435,6 +436,7 @@ deleteFurniture.addEventListener("click", () => {
 });
 canvas.addEventListener("shotmounted", () => {
   tools.hidden = false;
+  drawCurve.disabled = centerAim.disabled = false;
   publishObstacles();
 });
 function shotHandles(shot) {
@@ -830,6 +832,7 @@ async function inspectRoom(row, model, roomId, proposedShot, autoGeometry = true
   drawPlan = toWorld = projectPlan = pose = undefined;
   markDrag = undefined;
   tools.hidden = true;
+  drawCurve.disabled = centerAim.disabled = addActor.disabled = true;
   obstacles = [];
   obstacleKey = undefined;
   selectPlanMark("camera");
@@ -1449,7 +1452,7 @@ async function openCheckedProposal(room, setup, requireCapture = false) {
   const opened = await opening;
   if (request !== roomRequest || request.signal.aborted)
     throw Error("The room changed while the proposal was opening. Your selection was kept.");
-  const missingSightlines = opened && setup.requireSightlines && document.querySelector("#check-scan").disabled;
+  const missingSightlines = opened && setup.requireSightlines && !currentShotCanCheckSightlines();
   const missingCapture = opened && requireCapture && !retryMesh.hidden;
   if (!opened || missingSightlines || missingCapture) {
     await restoreSelection(previous);

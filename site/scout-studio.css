@@ -357,9 +357,10 @@ a { color: var(--accent); text-underline-offset: .18em; }
 #transport .camera-fields input[type="range"] { width: 100%; }
 .camera-options { display: flex; flex-wrap: wrap; gap: 6px 12px; padding-top: 12px; }
 .camera-options label { font-size: .85rem; }
-.visibility-control { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--line); }
-.visibility-control label { min-height: 24px; font-size: .85rem; }
-.visibility-control .planning-help { margin: 2px 0 0 25px; color: var(--muted); font-size: .8rem; }
+#alignment-tools { border-top: 1px solid var(--line); margin-block: 10px; padding-top: 8px; }
+#alignment > p { flex-basis: 100%; color: var(--muted); font-size: .875rem; }
+.alignment-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+#floor-overlay-key { position: absolute; top: 8px; left: 8px; margin: 0; border-radius: 5px; padding: 5px 8px; background: #181614e8; color: #ffd799; font-size: .8rem; pointer-events: none; }
 .capture-tools { border-top: 1px solid var(--line); margin-top: 12px; }
 .room-header {
   display: flex;
@@ -401,8 +402,12 @@ a { color: var(--accent); text-underline-offset: .18em; }
 .height-field input[type="range"] { width: 100%; padding-inline: 0; margin: 0; }
 .height-field .height-number { display: flex; align-items: center; gap: 4px; color: var(--muted); }
 .height-number input[type="number"] { width: 70px; min-height: 30px; padding: 3px 6px; color: var(--accent); }
-.furniture-tools { padding: 0 10px 8px; }
-#furniture-sizing { display: flex; gap: 8px; align-items: end; flex-wrap: wrap; width: 100%; }
+.plan-placement { width: 100%; }
+.plan-placement label { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 8px; font-size: .8rem; }
+.furniture-tools { padding: 0 10px 10px; }
+.plan-edit-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+.plan-edit-actions button { min-width: 0; min-height: 38px; padding: 6px 8px; font-size: .85rem; }
+#furniture-sizing { display: flex; gap: 8px; align-items: end; flex-wrap: wrap; width: 100%; padding-top: 8px; }
 #furniture-sizing label { display: grid; gap: 4px; font-size: .8rem; }
 #furniture-height { width: 82px; }
 #delete-furniture { min-height: 42px; color: #ffb6a5; }
