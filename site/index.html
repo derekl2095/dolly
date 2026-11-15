@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Dolly</title>
-<link rel="icon" href="dolly.svg" type="image/svg+xml">
+<link rel="icon" href="dolly.svg?v=viewfinder" type="image/svg+xml">
 <style>
 :root {color-scheme:dark;font:16px system-ui;background:#181b1c;color:#f1efe8}
 body {margin:0} main {max-width:1100px;margin:auto;padding:clamp(20px,5vw,60px)}
@@ -55,11 +55,11 @@ select {max-width:100%} canvas {width:100%;display:block;margin-top:12px;backgro
 #transport input[type="range"] {width:90px;padding:0}
 @media(max-width:700px){.layout{grid-template-columns:1fr}}
 </style>
-<link rel="stylesheet" href="scout-studio.css?v=dolly">
+<link rel="stylesheet" href="scout-studio.css?v=sheep-planner">
 </head>
 <body><main>
 <header class="studio-header">
-<a class="studio-brand" href="./"><img src="dolly.svg" alt="" width="36" height="36">Dolly</a>
+<a class="studio-brand" href="./"><img src="dolly.svg?v=viewfinder" alt="" width="36" height="36">Dolly</a>
 <nav aria-label="Workspace">
 <button id="back-to-results" type="button"><span class="to-results">← Results</span><span class="to-shot">Return to shot</span></button>
 </nav>
@@ -184,6 +184,7 @@ select {max-width:100%} canvas {width:100%;display:block;margin-top:12px;backgro
 </div>
 <div id="shot-grid"><div class="preview-column"><div id="viewport" hidden>
 <div id="camera-hud" aria-hidden="true"><span id="shot-time">00:00.0</span><span id="shot-lens">35 mm</span></div>
+<p id="floor-overlay-key" hidden>Floor alignment · Gold line should meet the wall bases</p>
 </div>
 <div id="transport" hidden>
 <div class="playback">
@@ -204,10 +205,6 @@ select {max-width:100%} canvas {width:100%;display:block;margin-top:12px;backgro
 <div class="camera-options">
 <label><input type="checkbox" id="keep-mark" checked> Keep camera mark</label>
 <label><input type="checkbox" id="show-marks"> Show actor stand-ins</label>
-</div>
-<div class="visibility-control" id="visibility-control" hidden>
-<label><input type="checkbox" id="check-scan" aria-describedby="sightline-help" disabled> Avoid blocked actor views</label>
-<p id="sightline-help" class="planning-help"></p>
 </div>
 </details>
 </div>
@@ -243,15 +240,17 @@ select {max-width:100%} canvas {width:100%;display:block;margin-top:12px;backgro
 <label class="height-number"><input id="aim-elevation" type="number" min="0" max="100" step="any" aria-label="Exact aim height in meters"><span aria-hidden="true">m</span></label>
 </div>
 </div>
-<div class="blocking-controls">
+<div class="plan-placement">
 <label>Place <select id="place-mark"><option value="camera">Camera center</option><option value="start">Camera start</option><option value="end">Camera end</option><option value="aim">Camera aim</option><option value="0">Actor 1</option><option value="1">Actor 2</option></select></label>
-<button id="add-actor" type="button">Add actor</button>
-<button id="draw-curve" type="button" aria-pressed="false">Draw path</button>
-<button id="center-aim" type="button">Aim at actors</button>
 </div>
 </div>
-<div class="furniture-tools blocking-controls" hidden>
-<button id="mark-obstacle" type="button" aria-pressed="false">Mark furniture</button>
+<div class="furniture-tools" hidden>
+<div class="plan-edit-actions">
+<button id="add-actor" type="button" disabled>Add actor</button>
+<button id="mark-obstacle" type="button" aria-pressed="false">Add furniture</button>
+<button id="draw-curve" type="button" aria-pressed="false" disabled>Draw path</button>
+<button id="center-aim" type="button" disabled>Aim at actors</button>
+</div>
 <div id="furniture-sizing" hidden>
 <label>Furniture <select id="furniture-selection"></select></label>
 <label>Height (m) <input type="number" id="furniture-height" min="0" max="12" step="any"></label>
@@ -260,22 +259,21 @@ select {max-width:100%} canvas {width:100%;display:block;margin-top:12px;backgro
 </div>
 <p id="plan-instructions" role="status" hidden>Drag empty space to orbit. Drag a handle to move it.</p>
 </div></div>
-<div class="shot-evidence"><p id="clearance" role="status"></p><p id="ceiling" role="status"></p><p id="framing" role="status"></p><p id="sightline" role="status"></p>
+<div class="shot-evidence"><p id="clearance" role="status"></p><p id="ceiling" role="status"></p><p id="framing" role="status"></p>
+<p id="sightline" role="status"></p>
+<div id="sightline-actions" hidden><button id="view-obstruction" type="button">Jump to blocked view</button></div>
 <details id="fit-planning" hidden>
 <summary>Find a move that fits</summary>
-<p class="planning-help">Checks clearance and framing. Dolly can shorten the move or shift it if the camera mark is unlocked.</p>
+<p class="planning-help">Checks clearance and framing, plus actor visibility when the scan is verified. Dolly can shorten the move or shift it if the camera mark is unlocked.</p>
 <button id="fit" type="button">Find fitting move</button>
 </details>
-<div id="sightline-actions" hidden>
-<button id="view-obstruction" type="button">Jump to blocked view</button>
-</div>
 <p id="revision" role="status"></p>
 </div>
 <form id="direction" hidden>
 <input aria-label="Camera direction" placeholder="Try a 1.5 m slide" maxlength="160" required>
 <button>Replan shot</button>
 </form>
-<details class="capture-tools"><summary>Room data and alignment</summary>
+<details class="capture-tools"><summary>Room data</summary>
 <p id="room-geometry" hidden></p>
 <details id="measured-room" hidden>
 <summary>Import measured room outline</summary>
@@ -287,12 +285,19 @@ select {max-width:100%} canvas {width:100%;display:block;margin-top:12px;backgro
 <p role="status"></p>
 </form>
 </details>
-<form id="alignment" hidden>
-<button type="button" id="alignment-view" aria-pressed="false">Inspect mesh alignment</button>
-<label>Floor elevation (m) <input name="height" type="number" step="any" min="-200" max="200" required></label>
-<label><input name="accepted" type="checkbox"> I checked the outline and floor elevation against the mesh</label>
-<button>Save alignment review</button>
+<details id="alignment-tools" hidden>
+<summary>Advanced scan alignment</summary>
+<form id="alignment">
+<p>Check that the gold outline follows the room walls where they meet the scanned floor. Use the angled view to check whether the outline floats above or sinks below the floor.</p>
+<div class="alignment-actions">
+<button type="button" id="alignment-view" aria-pressed="false">Show floor overlay</button>
+<button type="button" id="alignment-angle" aria-pressed="false" hidden>Angled view</button>
+</div>
+<label>Scan floor height (m) <input name="height" type="number" step="any" min="-200" max="200" required></label>
+<label><input name="accepted" type="checkbox"> Gold outline follows the walls at floor level</label>
+<button>Save floor alignment</button>
 </form><p id="alignment-status" role="status"></p>
+</details>
 <button id="import-mesh" type="button" hidden>Import MatterPak</button>
 <label id="upload-mesh" hidden>Use a MatterPak ZIP <input type="file" accept=".zip,application/zip"></label>
 <button id="retry-mesh" type="button" hidden>Retry captured mesh</button>
@@ -323,4 +328,4 @@ select {max-width:100%} canvas {width:100%;display:block;margin-top:12px;backgro
 </div>
 </main>
 <script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js","three-mesh-bvh":"https://cdn.jsdelivr.net/npm/three-mesh-bvh@0.8.3/build/index.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"}}</script>
-<script type="module" src="scout.js?v=dolly"></script></body></html>
+<script type="module" src="scout.js?v=sheep-planner"></script></body></html>

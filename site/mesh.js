@@ -26,11 +26,11 @@ const showMarks = document.querySelector("#show-marks");
 const aimElevation = document.querySelector("#aim-elevation");
 const aimSlider = document.querySelector("#aim-height-slider");
 const alignment = document.querySelector("#alignment");
+const alignmentTools = document.querySelector("#alignment-tools");
 const alignmentView = document.querySelector("#alignment-view");
+const alignmentAngle = document.querySelector("#alignment-angle");
+const floorOverlayKey = document.querySelector("#floor-overlay-key");
 const alignmentStatus = document.querySelector("#alignment-status");
-const checkScan = document.querySelector("#check-scan");
-const visibilityControl = document.querySelector("#visibility-control");
-const sightlineHelp = document.querySelector("#sightline-help");
 const fitPlanning = document.querySelector("#fit-planning");
 const keepMark = document.querySelector("#keep-mark");
 const exportShot = document.querySelector("#export-shot");
@@ -54,10 +54,16 @@ export function currentShot() {
   return active?.snapshot();
 }
 
+export function currentShotCanCheckSightlines() {
+  return active?.canCheckSightlines() === true;
+}
+
 export function closeMesh() {
   active?.dispose();
   active = undefined;
-  alignment.hidden = true;
+  alignmentTools.hidden = true;
+  alignmentTools.open = false;
+  floorOverlayKey.hidden = true;
   alignmentStatus.textContent = "";
   viewport.hidden = transport.hidden = retry.hidden = directionForm.hidden = true;
   status.textContent = "";
@@ -65,7 +71,6 @@ export function closeMesh() {
   sightlineActions.hidden = true;
   fitPlanning.hidden = true;
   fitPlanning.open = false;
-  visibilityControl.hidden = true;
   revision.textContent = "";
   document.querySelector("#clearance").textContent = "";
   document.querySelector("#framing").textContent = "";
@@ -258,8 +263,6 @@ function mount(THREE, room, mesh, textures, release, captured = false) {
   scene.add(marks, new THREE.HemisphereLight(0xffffff, 0xb7a28f, 2.3));
   showMarks.checked = false;
   let aligned = captured && room.matterpakAlignmentVerified === true;
-  checkScan.disabled = !aligned;
-  checkScan.checked = false;
 
   const midpoint = room.outline.reduce(([x, z], [px, pz]) => [x + px, z + pz], [0, 0])
     .map(value => value / room.outline.length);
@@ -290,7 +293,7 @@ function mount(THREE, room, mesh, textures, release, captured = false) {
   lens.value = Number.isFinite(saved?.lens) ? saved.lens : 35;
   travel.value = Number.isFinite(saved?.travel) ? saved.travel : .7;
   keepMark.checked = saved?.keepMark !== false;
-  checkScan.checked = saved?.requireSightlines === true;
+  let requireSavedSightlines = saved?.requireSightlines === true;
   moveKind.value = curve ? "curve"
     : ["slide", "push", "pull", "static", "custom"].includes(saved?.moveKind) ? saved.moveKind : "slide";
   if (curve) travel.value = curve.travel;
@@ -300,7 +303,7 @@ function mount(THREE, room, mesh, textures, release, captured = false) {
   function save() {
     try {
       localStorage.setItem(key, JSON.stringify({
-        mark: [cx, cz], ...settings(), aimHeight, lens: Number(lens.value), travel: curve?.travel ?? Number(travel.value), keepMark: keepMark.checked, moveKind: moveKind.value, axis: fixedMoveAxis, pathPoints: curve?.points, requireSightlines: checkScan.checked, actors, aimLocked, aim: [tx, tz],
+        mark: [cx, cz], ...settings(), aimHeight, lens: Number(lens.value), travel: curve?.travel ?? Number(travel.value), keepMark: keepMark.checked, moveKind: moveKind.value, axis: fixedMoveAxis, pathPoints: curve?.points, requireSightlines: requireSavedSightlines, actors, aimLocked, aim: [tx, tz],
       }));
     } catch {}
   }
@@ -328,10 +331,16 @@ function mount(THREE, room, mesh, textures, release, captured = false) {
   outline.renderOrder = 10;
   scene.add(outline);
   let reviewing = false;
-  alignment.hidden = !captured;
+  let angledReview = false;
+  const floorSection = new THREE.Plane(new THREE.Vector3(0, -1, 0), 0);
+  alignmentTools.hidden = !captured;
   alignment.elements.height.value = room.matterpakFloorHeight || 0;
   alignment.elements.accepted.checked = aligned;
   alignmentView.setAttribute("aria-pressed", "false");
+  alignmentView.textContent = "Show floor overlay";
+  alignmentAngle.hidden = true;
+  alignmentAngle.setAttribute("aria-pressed", "false");
+  alignmentAngle.textContent = "Angled view";
 
   const controls = new AbortController();
   let frame = 0;
@@ -425,13 +434,6 @@ function mount(THREE, room, mesh, textures, release, captured = false) {
     const distance = Number(travel.value);
     const canFit = !curve && hasCast() && moveKind.value !== "static" && distance > 0;
     fitPlanning.hidden = !canFit;
-    visibilityControl.hidden = false;
-    checkScan.disabled = !aligned || !hasCast();
-    const visibilityMessage = !captured ? "Load a captured scan to check actor visibility."
-      : !aligned ? "Review scan alignment to enable this check."
-      : !hasCast() ? "Place at least two actors to enable this check."
-      : "When finding a fitting move, checks actor visibility at five points.";
-    if (sightlineHelp.textContent !== visibilityMessage) sightlineHelp.textContent = visibilityMessage;
     const [from, to] = endpoints(distance);
     const t = Number(timeline.value) / 1000;
     const eased = easedPathFraction(t);
@@ -468,6 +470,22 @@ function mount(THREE, room, mesh, textures, release, captured = false) {
     camera.lookAt(previewAim?.[0] ?? tx, aimHeight, previewAim?.[1] ?? tz);
     marks.visible = showMarks.checked;
     outline.visible = reviewing;
+    if (reviewing) {
+      const savedFloor = room.matterpakFloorHeight || 0;
+      const proposed = alignment.elements.height.valueAsNumber;
+      const floorOffset = Number.isFinite(proposed) ? proposed - savedFloor : 0;
+      outline.position.y = floorOffset;
+      floorSection.constant = floorOffset + .4;
+      renderer.clippingPlanes = [floorSection];
+      if (angledReview) {
+        overhead.position.set(middleX + halfHeight * 2, floorOffset + halfHeight * 2, middleZ + halfHeight * 2);
+        overhead.up.set(0, 1, 0);
+      } else {
+        overhead.position.set(middleX, floorOffset + 100, middleZ);
+        overhead.up.set(0, 0, -1);
+      }
+      overhead.lookAt(middleX, floorOffset, middleZ);
+    } else renderer.clippingPlanes = [];
     renderer.render(scene, reviewing ? overhead : camera);
     document.querySelector("#shot-time").textContent = "00:" + (t * Number(duration.value)).toFixed(1).padStart(4, "0");
     document.querySelector("#duration-value").textContent = duration.value + " s";
@@ -496,21 +514,32 @@ function mount(THREE, room, mesh, textures, release, captured = false) {
     camera: () => reviewing ? overhead : camera, signal: controls.signal, actors: () => actors, render,
     showFloorPatch: triangles => plan.dispatchEvent(new CustomEvent("sunpatch", {detail: triangles}))}) : null;
   const options = {signal: controls.signal};
-  alignmentView.addEventListener("click", () => {
+  function showAlignmentReview(enabled) {
     stop();
-    reviewing = !reviewing;
+    reviewing = enabled;
     alignmentView.setAttribute("aria-pressed", String(reviewing));
+    alignmentView.textContent = reviewing ? "Return to shot" : "Show floor overlay";
+    alignmentAngle.hidden = !reviewing;
+    floorOverlayKey.hidden = !reviewing;
     alignmentStatus.textContent = reviewing
-      ? "The gold line is the metric room boundary. Compare it with the captured walls."
+      ? "Gold = room outline. The view cuts away the ceiling and upper walls so you can see the floor."
       : "";
+    render();
+  }
+  alignmentView.addEventListener("click", () => showAlignmentReview(!reviewing), options);
+  alignmentAngle.addEventListener("click", () => {
+    angledReview = !angledReview;
+    alignmentAngle.setAttribute("aria-pressed", String(angledReview));
+    alignmentAngle.textContent = angledReview ? "Top view" : "Angled view";
     render();
   }, options);
   alignment.elements.height.addEventListener("input", () => {
     alignment.elements.accepted.checked = false;
     const height = alignment.elements.height.valueAsNumber;
     alignmentStatus.textContent = Number.isFinite(height)
-      ? "Proposed floor elevation: " + height + " m. Save to apply it and recheck the shot."
+      ? "Floor overlay updated. Confirm the line follows the wall bases, then save."
       : "Enter a floor elevation in meters.";
+    if (reviewing) render();
   }, options);
   alignment.addEventListener("submit", async event => {
     event.preventDefault();
@@ -528,13 +557,14 @@ function mount(THREE, room, mesh, textures, release, captured = false) {
       room.matterpakFloorHeight = review.floorHeight;
       room.matterpakAlignmentVerified = aligned = review.accepted;
       room.alignmentEvidence = review.note;
-      checkScan.disabled = !aligned;
-      if (!aligned) checkScan.checked = false;
       save();
       alignMesh(mesh, room);
       refreshDaylight?.reload();
       checkedTravel = undefined;
-      alignmentStatus.textContent = review.note;
+      if (aligned && reviewing) showAlignmentReview(false);
+      alignmentStatus.textContent = aligned
+        ? "Floor alignment saved. Dolly can check actor visibility once at least two actors are placed."
+        : "Floor height saved. Confirm the outline matches before enabling actor visibility.";
       render();
     } catch (error) {
       if (!controls.signal.aborted) alignmentStatus.textContent = error.message;
@@ -579,11 +609,7 @@ function mount(THREE, room, mesh, textures, release, captured = false) {
       revision.textContent = "Draw a camera path between 1 cm and 4 m. The previous shot was kept.";
       return;
     }
-    if (reviewing) {
-      reviewing = false;
-      alignmentView.setAttribute("aria-pressed", "false");
-      alignmentStatus.textContent = "";
-    }
+    if (reviewing) showAlignmentReview(false);
     timeline.value = "0";
     applyCurve(path);
     revision.textContent = "Playing the drawn curve. Review clearance and framing below.";
@@ -624,11 +650,7 @@ function mount(THREE, room, mesh, textures, release, captured = false) {
   plan.addEventListener("previewaim", event => {
     stop();
     previewAim = event.detail;
-    if (previewAim && reviewing) {
-      reviewing = false;
-      alignmentView.setAttribute("aria-pressed", "false");
-      alignmentStatus.textContent = "";
-    }
+    if (previewAim && reviewing) showAlignmentReview(false);
     render();
   }, options);
   function updateAimHeight(input) {
@@ -724,7 +746,7 @@ function mount(THREE, room, mesh, textures, release, captured = false) {
     const ceiling = checkCameraHeight(room, cameraHeight);
     if (ceiling.status === "fail")
       return {reason: "Lower the camera below the reported room height.", ceiling};
-    const checkMesh = requireSightlines || checkScan.checked;
+    const checkMesh = requireSightlines || requireSavedSightlines;
     if (checkMesh && !aligned) {
       return {reason: "Captured sightlines require an aligned scan and actor marks."};
     }
@@ -801,7 +823,7 @@ function mount(THREE, room, mesh, textures, release, captured = false) {
       syncAimHeight();
     }
     if (Number.isFinite(setup.durationSeconds)) duration.value = setup.durationSeconds;
-    if (typeof setup.requireSightlines === "boolean") checkScan.checked = setup.requireSightlines;
+    if (typeof setup.requireSightlines === "boolean") requireSavedSightlines = setup.requireSightlines;
     if (typeof setup.keepMark === "boolean") keepMark.checked = setup.keepMark;
     travel.value = String(curve?.travel ?? pose.travel);
     save();
@@ -817,7 +839,7 @@ function mount(THREE, room, mesh, textures, release, captured = false) {
 
   fit.addEventListener("click", () => {
     const requested = Number(travel.value);
-    const proposal = planShot({distance: requested});
+    const proposal = planShot({distance: requested, requireSightlines: aligned && hasCast()});
     if (!proposal.setup) {
       revision.textContent = proposal.reason + " Current shot kept.";
       return;
@@ -860,7 +882,7 @@ function mount(THREE, room, mesh, textures, release, captured = false) {
     const secondsAt = fraction => timeFractionAtPath(fraction) * durationSeconds;
     const shot = {
       schemaVersion: 1, interpolation: "smoothstep", aimLocked,
-      keepMark: keepMark.checked, requireSightlines: checkScan.checked,
+      keepMark: keepMark.checked, requireSightlines: requireSavedSightlines,
       modelId: room.modelId, roomId: room.roomId || null, units: "meters", actors, start, end, pathPoints: curve?.points, aim: [tx, tz],
       cameraHeight: settings().cameraHeight, aimHeight,
       sensorWidthMm: settings().sensorWidthMm, focalLengthMm: Number(lens.value), aspect: [16, 9],
@@ -903,7 +925,6 @@ function mount(THREE, room, mesh, textures, release, captured = false) {
     render();
   }, options);
   keepMark.addEventListener("change", save, options);
-  checkScan.addEventListener("change", save, options);
   function updateShotControls() {
     checkedTravel = undefined;
     revision.textContent = "";
@@ -943,9 +964,9 @@ function mount(THREE, room, mesh, textures, release, captured = false) {
   }, options);
   if (room.proposedShot) save();
 
-  return {plan: planShot, apply: applySetup, snapshot() {
+  return {plan: planShot, apply: applySetup, canCheckSightlines: () => aligned && hasCast(), snapshot() {
     return {mark: [cx, cz], ...settings(), aimHeight, lens: Number(lens.value), travel: curve?.travel ?? Number(travel.value),
-      moveKind: moveKind.value, axis: fixedMoveAxis, pathPoints: curve?.points, keepMark: keepMark.checked, requireSightlines: checkScan.checked, obstacles, actors: actors.map(point => point?.slice() ?? null), aimLocked, aim: [tx, tz]};
+      moveKind: moveKind.value, axis: fixedMoveAxis, pathPoints: curve?.points, keepMark: keepMark.checked, requireSightlines: requireSavedSightlines, obstacles, actors: actors.map(point => point?.slice() ?? null), aimLocked, aim: [tx, tz]};
   }, dispose() {
     stop();
     controls.abort();
